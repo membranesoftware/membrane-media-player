@@ -34,6 +34,9 @@ The Membrane Media Player source files provide examples for possible ways to sol
 - Processing SDL keyboard and mouse input events: [Input.cpp](src/Input.cpp) pollEvents method
 - Processing ffmpeg audio and video streams decoded from a media file: [Video.cpp](src/Video.cpp) executeReadPackets method
 - Writing an ffmpeg video stream composed from captured frame images: [MediaWriter.cpp](src/MediaWriter.cpp) executeWritePackets method
+- Parsing subtitle entries from srt (SubRip) files: [SubtitleReader.cpp](src/SubtitleReader.cpp) readSubtitles method
+- Rendering audio visualization as a waveform line: [WaveformShader.cpp](src/WaveformShader.cpp) updateRenderState and assignParticlePositions methods
+- Drawing a line of pixels by use of Bresenham's line algorithm: [Shader.cpp](src/Shader.cpp) drawLine method
 - Storing and retrieving records in sqlite3 files: [Database.cpp](src/Database.cpp) open and exec methods
 - Running a text string as Lua script: [LuaScript.cpp](src/LuaScript.cpp) run method
 - Making C++ functions available for call by Lua scripts: [LuaScript.cpp](src/LuaScript.cpp) constructor
