@@ -59,11 +59,6 @@ MediaItemImageWindow *MediaItemImageWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::MediaItemImageWindow) ? (MediaItemImageWindow *) widget : NULL);
 }
 
-StdString MediaItemImageWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void MediaItemImageWindow::reflow () {
 	double x, y;
 

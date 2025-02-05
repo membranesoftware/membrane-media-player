@@ -83,11 +83,6 @@ MediaThumbnailWindow *MediaThumbnailWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::MediaThumbnailWindow) ? (MediaThumbnailWindow *) widget : NULL);
 }
 
-StdString MediaThumbnailWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void MediaThumbnailWindow::setMarkerControl (bool enable) {
 	if (isMarkerControlEnabled == enable) {
 		return;

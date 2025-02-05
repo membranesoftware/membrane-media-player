@@ -135,6 +135,8 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_starOutlineButton);
 	s.push_back (SpriteId::SpriteGroup_startPositionIcon);
 	s.push_back (SpriteId::SpriteGroup_storageIcon);
+	s.push_back (SpriteId::SpriteGroup_subtitleOffButton);
+	s.push_back (SpriteId::SpriteGroup_subtitleOnButton);
 	s.push_back (SpriteId::SpriteGroup_tagIcon);
 	s.push_back (SpriteId::SpriteGroup_taskInProgressIcon);
 	s.push_back (SpriteId::SpriteGroup_toggleCheckbox);
@@ -145,6 +147,7 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_versionIcon);
 	s.push_back (SpriteId::SpriteGroup_visibilityOffButton);
 	s.push_back (SpriteId::SpriteGroup_visibilityOnButton);
+	s.push_back (SpriteId::SpriteGroup_visualizerButton);
 	s.push_back (SpriteId::SpriteGroup_webLinkIcon);
 	return (s);
 }
@@ -446,6 +449,12 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	if (StdString (SpriteId::SpriteGroup_storageIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_storageIcon);
 	}
+	if (StdString (SpriteId::SpriteGroup_subtitleOffButton).startsWith (prefix)) {
+		s.push_back (SpriteId::SpriteGroup_subtitleOffButton);
+	}
+	if (StdString (SpriteId::SpriteGroup_subtitleOnButton).startsWith (prefix)) {
+		s.push_back (SpriteId::SpriteGroup_subtitleOnButton);
+	}
 	if (StdString (SpriteId::SpriteGroup_tagIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_tagIcon);
 	}
@@ -475,6 +484,9 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	}
 	if (StdString (SpriteId::SpriteGroup_visibilityOnButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_visibilityOnButton);
+	}
+	if (StdString (SpriteId::SpriteGroup_visualizerButton).startsWith (prefix)) {
+		s.push_back (SpriteId::SpriteGroup_visualizerButton);
 	}
 	if (StdString (SpriteId::SpriteGroup_webLinkIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_webLinkIcon);

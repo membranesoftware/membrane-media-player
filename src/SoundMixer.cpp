@@ -35,13 +35,14 @@
 #include "SdlUtil.h"
 #include "OsUtil.h"
 #include "Log.h"
-#include "Buffer.h"
+#include "SharedBuffer.h"
 #include "HashMap.h"
 #include "SoundMixer.h"
 
 SoundMixer *SoundMixer::instance = NULL;
 constexpr const int defaultOutputSampleRate = 44100;
 constexpr const SDL_AudioFormat defaultOutputFormat = AUDIO_F32;
+constexpr const int outputCallbackPeriod = 25;
 
 SoundMixer::SoundMixer ()
 : deviceWritePeriod (10)
@@ -57,7 +58,6 @@ SoundMixer::SoundMixer ()
 , readaheadSize (0)
 , playerThread (NULL)
 , isPlayerThreadRunning (false)
-, playerUpdateTime (0)
 , mixFn (SoundMixer::mixFloat32)
 {
 	SdlUtil::createMutex (&playerMutex);
@@ -65,7 +65,7 @@ SoundMixer::SoundMixer ()
 }
 SoundMixer::~SoundMixer () {
 	clearPlayerMap ();
-	clearQueueMap ();
+	clearPlayerQueueMap ();
 	clearSampleMap ();
 	SdlUtil::destroyCond (&playerCond);
 	SdlUtil::destroyMutex (&playerMutex);
@@ -97,21 +97,7 @@ void SoundMixer::clearSampleMap () {
 	sampleMap.clear ();
 }
 
-void SoundMixer::clearPlayerMap () {
-	std::map<int64_t, SoundMixer::Player>::const_iterator i1, i2;
-
-	i1 = playerMap.cbegin ();
-	i2 = playerMap.cend ();
-	while (i1 != i2) {
-		if (i1->second.sample) {
-			i1->second.sample->release ();
-		}
-		++i1;
-	}
-	playerMap.clear ();
-}
-
-void SoundMixer::clearQueueMap () {
+void SoundMixer::clearPlayerQueueMap () {
 	std::map<int64_t, SoundMixer::PlayerQueue>::iterator i1, i2;
 
 	i1 = queueMap.begin ();
@@ -122,15 +108,47 @@ void SoundMixer::clearQueueMap () {
 	}
 	queueMap.clear ();
 }
-
 void SoundMixer::clearPlayerQueue (SoundMixer::PlayerQueue *playerQueue) {
-	std::queue<Buffer *> *q;
+	std::queue<SharedBuffer *> *q;
+	SharedBuffer *buffer;
 
 	q = &(playerQueue->sampleQueue);
 	while (! q->empty ()) {
-		if (playerQueue->isLive) {
-			delete (q->front ());
-		}
+		buffer = q->front ();
+		buffer->release ();
+		q->pop ();
+	}
+	playerQueue->sampleQueueSize = 0;
+	playerQueue->writePosition = 0;
+	playerQueue->bufferPosition = 0;
+}
+
+void SoundMixer::clearPlayerMap () {
+	std::map<int64_t, SoundMixer::Player>::iterator i1, i2;
+
+	i1 = playerMap.begin ();
+	i2 = playerMap.end ();
+	while (i1 != i2) {
+		clearPlayer (&(i1->second));
+		++i1;
+	}
+	playerMap.clear ();
+}
+void SoundMixer::clearPlayer (SoundMixer::Player *player) {
+	clearPlayerOutputSamples (player);
+	if (player->sample) {
+		player->sample->release ();
+		player->sample = NULL;
+	}
+}
+void SoundMixer::clearPlayerOutputSamples (SoundMixer::Player *player) {
+	std::queue<SharedBuffer *> *q;
+	SharedBuffer *buffer;
+
+	q = &(player->outputSampleQueue);
+	while (! q->empty ()) {
+		buffer = q->front ();
+		buffer->release ();
 		q->pop ();
 	}
 }
@@ -212,7 +230,7 @@ OpResult SoundMixer::start () {
 	}
 
 	isActive = true;
-	playerThread = SDL_CreateThread (SoundMixer::runPlayerThread, "runPlayerThread", this);
+	playerThread = SDL_CreateThread (SoundMixer::runPlayers, "SoundMixer::runPlayers", this);
 	if (! playerThread) {
 		lastErrorMessage.assign (SDL_GetError ());
 		isActive = false;
@@ -247,22 +265,21 @@ void SoundMixer::stop () {
 	SDL_LockMutex (playerMutex);
 	SDL_CondBroadcast (playerCond);
 	SDL_UnlockMutex (playerMutex);
-	clearQueueMap ();
+	clearPlayerQueueMap ();
 }
 
 bool SoundMixer::isStopComplete () {
 	return (isStopped && (! isPlayerThreadRunning));
 }
 
-int SoundMixer::runPlayerThread (void *itPtr) {
+int SoundMixer::runPlayers (void *itPtr) {
 	SoundMixer *it = (SoundMixer *) itPtr;
 
-	it->executePlayerUpdate ();
+	it->executeRunPlayers ();
 	it->isPlayerThreadRunning = false;
 	return (0);
 }
-
-void SoundMixer::executePlayerUpdate () {
+void SoundMixer::executeRunPlayers () {
 	std::map<int64_t, SoundMixer::Player>::iterator i1, i2;
 	std::list<int64_t> endedids;
 	std::list<int64_t>::const_iterator j1, j2;
@@ -279,7 +296,6 @@ void SoundMixer::executePlayerUpdate () {
 			SDL_CondWait (playerCond, playerMutex);
 			continue;
 		}
-		playerUpdateTime = OsUtil::getTime ();
 		tnext = 0;
 		endedids.clear ();
 		i1 = playerMap.begin ();
@@ -306,9 +322,7 @@ void SoundMixer::executePlayerUpdate () {
 			while (j1 != j2) {
 				i1 = playerMap.find (*j1);
 				if (i1 != playerMap.end ()) {
-					if (i1->second.sample) {
-						i1->second.sample->release ();
-					}
+					clearPlayer (&(i1->second));
 					playerMap.erase (i1);
 				}
 				++j1;
@@ -345,25 +359,31 @@ void SoundMixer::executePlayerUpdate () {
 	}
 	SDL_UnlockMutex (playerMutex);
 }
-
 void SoundMixer::updatePlayer (SoundMixer::Player *player) {
 	OpResult result;
 	SoundSample::AudioFrame frame;
 	std::map<int64_t, SoundMixer::PlayerQueue>::iterator qpos;
-	int64_t t;
+	int64_t t, now;
 
+	now = OsUtil::getTime ();
 	if ((! player->sample) || player->sample->isLoadFailed) {
 		player->isEnded = true;
 		return;
 	}
 	if (player->startTime <= 0) {
-		player->startTime = playerUpdateTime;
+		player->startTime = now;
 	}
+	executeOutputCallback (player);
 	if (player->isLive) {
-		player->nextReadTime = 0;
+		if (player->outputCallback.callback) {
+			player->nextReadTime = now + outputCallbackPeriod;
+		}
+		else {
+			player->nextReadTime = 0;
+		}
 		return;
 	}
-	if (player->nextReadTime > playerUpdateTime) {
+	if (player->nextReadTime > now) {
 		return;
 	}
 
@@ -377,19 +397,82 @@ void SoundMixer::updatePlayer (SoundMixer::Player *player) {
 			break;
 		}
 		t = player->startTime + frame.pts - readaheadTime;
-		if (t > playerUpdateTime) {
+		if (t > now) {
 			player->nextReadTime = t;
 			break;
 		}
 
 		player->lastPts = frame.pts;
-		player->nextReadTime = playerUpdateTime + frame.duration;
+		player->nextReadTime = now + frame.duration;
 		SDL_LockAudioDevice (audioDeviceId);
 		qpos = queueMap.find (player->id);
 		if (qpos != queueMap.end ()) {
+			frame.sampleData->retain ();
 			qpos->second.sampleQueue.push (frame.sampleData);
+			qpos->second.sampleQueueSize += frame.sampleData->length;
 		}
 		SDL_UnlockAudioDevice (audioDeviceId);
+
+		if (player->outputCallback.callback) {
+			frame.sampleData->retain ();
+			player->outputSampleQueue.push (frame.sampleData);
+		}
+	}
+}
+void SoundMixer::executeOutputCallback (SoundMixer::Player *player) {
+	std::map<int64_t, SoundMixer::PlayerQueue>::iterator qpos;
+	SharedBuffer *buffer;
+	int64_t writepos, delta;
+	int writelen;
+	bool readahead;
+
+	if (! player->outputCallback.callback) {
+		return;
+	}
+	writepos = -1;
+	SDL_LockAudioDevice (audioDeviceId);
+	qpos = queueMap.find (player->id);
+	if (qpos != queueMap.end ()) {
+		writepos = qpos->second.writePosition;
+	}
+	SDL_UnlockAudioDevice (audioDeviceId);
+	delta = writepos - player->outputQueueWritePosition;
+	if (delta <= 0) {
+		return;
+	}
+	player->outputQueueWritePosition = writepos;
+	player->outputReadPosition += delta;
+	readahead = (! player->isOutputReadaheadComplete);
+	if (readahead) {
+		delta = 0;
+	}
+	if (player->outputReadPosition >= 0) {
+		if (readahead) {
+			writelen = (int) ((int64_t) readaheadTime * outputSampleRate * outputSampleSize * outputChannelCount / 1000);
+		}
+		else {
+			writelen = (int) player->outputReadPosition;
+		}
+		while (writelen > 0) {
+			if (player->outputSampleQueue.empty ()) {
+				break;
+			}
+			buffer = player->outputSampleQueue.front ();
+			player->outputCallback.callback (player->outputCallback.callbackData, buffer, (int) delta);
+			writelen -= buffer->length;
+			if (! readahead) {
+				player->outputReadPosition -= buffer->length;
+			}
+			delta = 0;
+			buffer->release ();
+			player->outputSampleQueue.pop ();
+		}
+		if (readahead) {
+			player->isOutputReadaheadComplete = true;
+		}
+	}
+	if (delta > 0) {
+		player->outputCallback.callback (player->outputCallback.callbackData, NULL, (int) delta);
 	}
 }
 
@@ -398,7 +481,7 @@ void SoundMixer::audioCallback (void *userdata, Uint8 *stream, int len) {
 	std::map<int64_t, SoundMixer::PlayerQueue>::iterator i1, i2, qpos;
 	SoundMixer::PlayerQueue *q;
 	int writepos, writesize, framesize, volume;
-	Buffer *buffer;
+	SharedBuffer *buffer;
 	std::list<int64_t> endedids;
 	std::list<int64_t>::const_iterator j1, j2;
 
@@ -414,7 +497,7 @@ void SoundMixer::audioCallback (void *userdata, Uint8 *stream, int len) {
 		}
 		while ((writesize > 0) && (! q->sampleQueue.empty ())) {
 			buffer = q->sampleQueue.front ();
-			framesize = buffer->length - q->position;
+			framesize = buffer->length - q->bufferPosition;
 			if (framesize > writesize) {
 				framesize = writesize;
 			}
@@ -426,17 +509,17 @@ void SoundMixer::audioCallback (void *userdata, Uint8 *stream, int len) {
 				}
 			}
 			if (volume > 0) {
-				it->mixFn (stream + writepos, volume, buffer->data + q->position, framesize);
+				it->mixFn (stream + writepos, volume, buffer->data + q->bufferPosition, framesize);
 			}
 			writepos += framesize;
 			writesize -= framesize;
-			q->position += framesize;
-			if (q->position >= buffer->length) {
-				if (q->isLive) {
-					delete (buffer);
-				}
+			q->bufferPosition += framesize;
+			q->writePosition += framesize;
+			if (q->bufferPosition >= buffer->length) {
+				q->bufferPosition = 0;
+				q->sampleQueueSize -= buffer->length;
 				q->sampleQueue.pop ();
-				q->position = 0;
+				buffer->release ();
 			}
 		}
 		if (q->sampleQueue.empty () && q->isEnded) {
@@ -634,7 +717,7 @@ void SoundMixer::unloadSample (const char *soundId) {
 	}
 }
 
-int64_t SoundMixer::playResourceSample (const char *soundId, int mixVolume, bool muted) {
+int64_t SoundMixer::playResourceSample (const char *soundId, int mixVolume, bool muted, SoundMixer::OutputCallbackContext outputCallback) {
 	std::map<StdString, SoundSample *>::iterator pos;
 	SoundSample *sample;
 	int64_t id;
@@ -652,7 +735,7 @@ int64_t SoundMixer::playResourceSample (const char *soundId, int mixVolume, bool
 		id = App::instance->getUniqueId ();
 		sample->retain ();
 		SDL_LockMutex (playerMutex);
-		playerMap.insert (std::pair<int64_t, SoundMixer::Player> (id, SoundMixer::Player (id, sample, false)));
+		playerMap.insert (std::pair<int64_t, SoundMixer::Player> (id, SoundMixer::Player (id, sample, false, outputCallback)));
 		SDL_CondBroadcast (playerCond);
 		SDL_UnlockMutex (playerMutex);
 
@@ -663,7 +746,7 @@ int64_t SoundMixer::playResourceSample (const char *soundId, int mixVolume, bool
 	return (id);
 }
 
-int64_t SoundMixer::playLiveSample (SoundSample *sample, int mixVolume, bool muted) {
+int64_t SoundMixer::playLiveSample (SoundSample *sample, int mixVolume, bool muted, SoundMixer::OutputCallbackContext outputCallback) {
 	int64_t id;
 
 	if (! isActive) {
@@ -673,7 +756,7 @@ int64_t SoundMixer::playLiveSample (SoundSample *sample, int mixVolume, bool mut
 	sample->retain ();
 	sample->setLive (id, SoundMixer::liveSampleFrameCallback, this);
 	SDL_LockMutex (playerMutex);
-	playerMap.insert (std::pair<int64_t, SoundMixer::Player> (id, SoundMixer::Player (id, sample, true)));
+	playerMap.insert (std::pair<int64_t, SoundMixer::Player> (id, SoundMixer::Player (id, sample, true, outputCallback)));
 	SDL_CondBroadcast (playerCond);
 	SDL_UnlockMutex (playerMutex);
 
@@ -685,24 +768,49 @@ int64_t SoundMixer::playLiveSample (SoundSample *sample, int mixVolume, bool mut
 }
 void SoundMixer::liveSampleFrameCallback (void *itPtr, SoundSample *sample, const SoundSample::AudioFrame &frame) {
 	SoundMixer *it = (SoundMixer *) itPtr;
-	std::map<int64_t, SoundMixer::PlayerQueue>::iterator pos;
-	bool found;
+	std::map<int64_t, SoundMixer::PlayerQueue>::iterator qpos;
+	std::map<int64_t, SoundMixer::Player>::iterator playerpos;
+	int playerid;
 
 	if (! it->isActive) {
-		delete (frame.sampleData);
 		return;
 	}
-	found = false;
+	playerid = sample->livePlayerId;
 	SDL_LockAudioDevice (it->audioDeviceId);
-	pos = it->queueMap.find (sample->livePlayerId);
-	if (pos != it->queueMap.end ()) {
-		found = true;
-		pos->second.sampleQueue.push (frame.sampleData);
+	qpos = it->queueMap.find (playerid);
+	if (qpos != it->queueMap.end ()) {
+		frame.sampleData->retain ();
+		qpos->second.sampleQueue.push (frame.sampleData);
+		qpos->second.sampleQueueSize += frame.sampleData->length;
 	}
 	SDL_UnlockAudioDevice (it->audioDeviceId);
-	if (! found) {
-		delete (frame.sampleData);
+
+	SDL_LockMutex (it->playerMutex);
+	playerpos = it->playerMap.find (playerid);
+	if (playerpos != it->playerMap.end ()) {
+		if ((! playerpos->second.isEnded) && playerpos->second.outputCallback.callback) {
+			frame.sampleData->retain ();
+			playerpos->second.outputSampleQueue.push (frame.sampleData);
+			SDL_CondBroadcast (it->playerCond);
+		}
 	}
+	SDL_UnlockMutex (it->playerMutex);
+}
+
+bool SoundMixer::isPlayerActive (int64_t playerId) {
+	std::map<int64_t, SoundMixer::Player>::iterator pos;
+	bool result;
+
+	result = false;
+	SDL_LockMutex (playerMutex);
+	pos = playerMap.find (playerId);
+	if (pos != playerMap.end ()) {
+		if (! pos->second.isEnded) {
+			result = true;
+		}
+	}
+	SDL_UnlockMutex (playerMutex);
+	return (result);
 }
 
 void SoundMixer::stopPlayer (int64_t playerId) {
@@ -715,9 +823,7 @@ void SoundMixer::stopPlayer (int64_t playerId) {
 	pos = playerMap.find (playerId);
 	if (pos != playerMap.end ()) {
 		found = true;
-		if (pos->second.sample) {
-			pos->second.sample->release ();
-		}
+		clearPlayer (&(pos->second));
 		playerMap.erase (pos);
 	}
 	SDL_UnlockMutex (playerMutex);
@@ -781,4 +887,38 @@ void SoundMixer::setPlayerMixVolume (int64_t playerId, int mixVolume) {
 		qpos->second.mixVolume = mixVolume;
 	}
 	SDL_UnlockAudioDevice (audioDeviceId);
+}
+
+void SoundMixer::setOutputCallback (int64_t playerId, SoundMixer::OutputCallbackContext callback) {
+	std::map<int64_t, SoundMixer::PlayerQueue>::iterator qpos;
+	std::map<int64_t, SoundMixer::Player>::iterator playerpos;
+	int64_t writepos, queuesize;
+
+	writepos = 0;
+	queuesize = 0;
+	if (callback.callback) {
+		SDL_LockAudioDevice (audioDeviceId);
+		qpos = queueMap.find (playerId);
+		if (qpos != queueMap.end ()) {
+			writepos = qpos->second.writePosition;
+			queuesize = qpos->second.sampleQueueSize;
+		}
+		SDL_UnlockAudioDevice (audioDeviceId);
+	}
+
+	SDL_LockMutex (playerMutex);
+	playerpos = playerMap.find (playerId);
+	if (playerpos != playerMap.end ()) {
+		playerpos->second.outputCallback = callback;
+		playerpos->second.outputQueueWritePosition = writepos;
+		playerpos->second.outputReadPosition = -queuesize;
+		playerpos->second.isOutputReadaheadComplete = false;
+		if (! playerpos->second.outputCallback.callback) {
+			clearPlayerOutputSamples (&(playerpos->second));
+		}
+		else {
+			SDL_CondBroadcast (playerCond);
+		}
+	}
+	SDL_UnlockMutex (playerMutex);
 }

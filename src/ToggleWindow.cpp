@@ -82,11 +82,6 @@ ToggleWindow *ToggleWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::ToggleWindow) ? (ToggleWindow *) widget : NULL);
 }
 
-StdString ToggleWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void ToggleWindow::setText (const StdString &text) {
 	textLabelHandle.destroyAndAssign (new Label (text, UiConfiguration::CaptionFont, isInverseColor ? UiConfiguration::instance->inverseTextColor : UiConfiguration::instance->primaryTextColor));
 	textLabel->isInputSuspended = true;

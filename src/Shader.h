@@ -30,76 +30,65 @@
 * QUESTIONS OR ADDITIONAL INFORMATION
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
-// Class that stores information received from application news requests
-#ifndef APP_NEWS_H
-#define APP_NEWS_H
+// Widget that renders from a writable texture
+#ifndef SHADER_H
+#define SHADER_H
 
-class Json;
+#include "Position.h"
+#include "Widget.h"
 
-class AppNews {
+class Color;
+
+class Shader : public Widget {
 public:
-	AppNews ();
-	~AppNews ();
-	static AppNews *instance;
+	Shader ();
+	virtual ~Shader ();
 
-	// Initialize static instance data
-	static void createInstance ();
-
-	// Clear static instance data
-	static void freeInstance ();
-
-	static constexpr const int metadataVersion = 2;
-	static constexpr const char *metadataTableName = "AppNewsMetadata";
+	// Read-write data members
+	Widget::EventCallbackContext resizeCallback;
+	Widget::EventCallbackContext animationCompleteCallback;
 
 	// Read-only data members
-	bool isReady;
-	bool isLoading;
-	bool isLoadFailed;
-	StdString databasePath;
+	bool isAnimationComplete;
 
-	// Set the news store to target the specified database path
-	void configure (const StdString &databasePathValue);
+protected:
+	// Execute subclass-specific operations to update object state as appropriate for an elapsed millisecond time period
+	virtual void doUpdate (int msElapsed);
 
-	struct NewsPost {
-		StdString body;
-		int64_t publishTime;
-		int64_t endTime;
-		NewsPost ():
-			publishTime (0),
-			endTime (0) { }
-	};
-	struct NewsState {
-		StdString recordBuildId;
-		StdString updateBuildId;
-		int64_t updatePublishTime;
-		std::list<AppNews::NewsPost> posts;
-		NewsState ():
-			updatePublishTime (0) { }
-	};
-	// Parse news state from a GetApplicationNewsResult command string into the provided struct, and return true if state fields were successfully loaded
-	bool parseCommand (const StdString &command, AppNews::NewsState *state);
+	// Add subclass-specific draw commands for execution by the App
+	virtual void doDraw (double originX, double originY);
 
-	// Store news state from a GetApplicationNewsResult command string
-	OpResult writeRecord (const StdString &command);
+	// Update render state as appropriate for an elapsed millisecond time period and return true if texture updates are needed
+	virtual bool updateRenderState (int msElapsed);
 
-	// Read stored news state into the provided struct, and return true if state fields were successfully loaded
-	bool readRecord (AppNews::NewsState *state);
+	// Update the content of renderTexture as appropriate for render state
+	virtual void updateRenderTexture ();
 
-private:
-	// Task functions
-	static void initialize (void *itPtr);
-	OpResult executeInitialize ();
+	// Lock renderTexture, assign values to renderPixels and renderPitch, and return true if the lock succeeded.
+	bool lockRenderTexture ();
 
-	// Row select callback
-	static int readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames);
+	// Unlock renderTexture
+	void unlockRenderTexture ();
 
-	// Execute schema update operations as needed and return a result value
-	OpResult updateSchema (StdString *errorMessage);
+	// Render task functions
+	static void resetRenderTexture (void *itPtr);
+	void executeResetRenderTexture ();
 
-	// Read state fields from a GetApplicationNewsResult params object
-	void parseCommandParams (Json *params, AppNews::NewsState *state);
+	// Texture draw methods must only be invoked while the render texture is locked.
+	// Draw a line to renderPixels
+	void drawLine (const Color &drawColor, int lineX1, int lineY1, int lineX2, int lineY2);
 
-	bool isDatabaseOpen;
-	SDL_mutex *databaseMutex;
+	bool isRendering;
+	bool shouldRender;
+	int64_t renderMsElapsed;
+	int textureWidth;
+	int textureHeight;
+	SDL_Texture *renderTexture;
+	StdString renderTexturePath;
+	SDL_PixelFormat *renderPixelFormat;
+	void *renderPixels;
+	int renderPitch;
+	int frameUpdateCount;
+	int frameUpdateInterval;
 };
 #endif

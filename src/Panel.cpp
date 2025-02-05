@@ -55,6 +55,7 @@
 #include "ProgressRing.h"
 #include "ScrollBar.h"
 #include "ScrollView.h"
+#include "Shader.h"
 #include "Slider.h"
 #include "SliderWindow.h"
 #include "TextArea.h"
@@ -263,6 +264,10 @@ ScrollBar *Panel::add (ScrollBar *widget, int zLevel) {
 
 ScrollView *Panel::add (ScrollView *widget, int zLevel) {
 	return ((ScrollView *) addWidget (widget, zLevel));
+}
+
+Shader *Panel::add (Shader *widget, int zLevel) {
+	return ((Shader *) addWidget (widget, zLevel));
 }
 
 Slider *Panel::add (Slider *widget, int zLevel) {

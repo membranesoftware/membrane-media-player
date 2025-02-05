@@ -83,6 +83,7 @@ FsBrowserWindow::FsBrowserWindow (double windowWidth, double windowHeight, const
 	pathView->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
 	pathView->setViewLayout (Panel::DownFlowLayoutOption | Panel::LeftGravityLayoutOption, 0.0f);
 	pathView->setScrollOptions (ScrollViewWindow::KeyboardScrollOption | ScrollViewWindow::MouseWheelScrollOption);
+	pathView->setScrollBarPosition (ScrollViewWindow::RightEdgeScrollBarPosition);
 
 	enterTextButton = add (new Button (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_keyboardButton)));
 	enterTextButton->widgetName.assign ("fsBrowserEnterTextButton");
@@ -97,7 +98,7 @@ FsBrowserWindow::FsBrowserWindow (double windowWidth, double windowHeight, const
 	componentBackButton->setMouseHoverTooltip (UiText::instance->getText (UiTextId::FsBrowserWindowComponentBackButtonTooltip));
 	componentBackButton->setDisabled (true);
 
-	componentPanel = add (new Panel ());
+	componentPanel = add (new Panel (), 1);
 	componentPanel->setFixedPadding (true, 0.0f, 0.0f);
 	componentPanel->layoutSpacing = 0.0f;
 	componentPanel->setLayout (Panel::RightFlowLayoutOption | Panel::VerticalCenterLayoutOption);
@@ -119,6 +120,7 @@ FsBrowserWindow::FsBrowserWindow (double windowWidth, double windowHeight, const
 	selectedPathLabel2->isVisible = false;
 
 	cancelButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_cancelButton), Widget::EventCallbackContext (FsBrowserWindow::cancelButtonClicked, this), UiText::instance->getText (UiTextId::Cancel).capitalized (), "fsBrowserCancelButton"));
+	cancelButton->shortcutKey = SDLK_ESCAPE;
 
 	confirmButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_okButton), Widget::EventCallbackContext (FsBrowserWindow::confirmButtonClicked, this), UiText::instance->getText (UiTextId::FsBrowserWindowConfirmButtonTooltip), "fsBrowserConfirmButton"));
 	confirmButton->setDisabled (true);

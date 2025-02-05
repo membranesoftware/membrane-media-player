@@ -260,6 +260,50 @@ StdString OsUtil::getPathExtension (const StdString &path) {
 	return (StdString (path.substr (pos + 1)));
 }
 
+StdString OsUtil::getAppendExtensionPath (const StdString &path, const StdString &extension) {
+	StdString s;
+
+	if (path.empty () && extension.empty ()) {
+		return (StdString ());
+	}
+	s.assign (path);
+	s.append (".");
+	s.append (extension);
+	return (s);
+}
+
+StdString OsUtil::getReplaceExtensionPath (const StdString &path, const StdString &extension) {
+	StdString s;
+	size_t pos;
+
+	if (path.empty () && extension.empty ()) {
+		return (StdString ());
+	}
+	s.assign (path);
+	pos = s.find_last_of ('.');
+	if (pos != StdString::npos) {
+		s = s.substr (0, pos);
+	}
+	s.append (".");
+	s.append (extension);
+	return (s);
+}
+
+StdString OsUtil::getTrailingSeparatorPath (const StdString &path) {
+	StdString delim, s;
+
+#if PLATFORM_WINDOWS
+	delim.assign ("\\");
+#else
+	delim.assign ("/");
+#endif
+	s.assign (path);
+	if (! s.endsWith (delim)) {
+		s.append (delim);
+	}
+	return (s);
+}
+
 void OsUtil::splitPath (const StdString &path, StringList *destList) {
 	StdString delim;
 	StringList parts;
@@ -595,7 +639,7 @@ Buffer *OsUtil::readFile (const StdString &path) {
 		return (NULL);
 	}
 	buf = new Buffer ();
-	while (1) {
+	while (true) {
 		len = (int) fread (data, 1, sizeof (data), fp);
 		if (len > 0) {
 			buf->add (data, len);
@@ -606,6 +650,97 @@ Buffer *OsUtil::readFile (const StdString &path) {
 	}
 	fclose (fp);
 	return (buf);
+}
+
+OpResult OsUtil::readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength) {
+	FILE *fp;
+	uint8_t data[8192], *d, *end, *linestart;
+	char c, lastchar;
+	uint8_t bom1, bom2, bom3;
+	int readlen, linelen;
+	bool firstline;
+	StdString line;
+	OpResult result;
+
+	if (maxLineLength < 0) {
+		return (OpResult::InvalidParamError);
+	}
+	line.reserve (maxLineLength);
+
+	fp = fopen (path.c_str (), "rb");
+	if (! fp) {
+		return (OpResult::FileOpenFailedError);
+	}
+	result = OpResult::Success;
+	firstline = true;
+	linelen = 0;
+	lastchar = 0;
+	while (true) {
+		readlen = (int) fread (data, 1, sizeof (data), fp);
+		if (readlen > 0) {
+			linestart = NULL;
+			d = data;
+			end = data + readlen;
+			while (d < end) {
+				c = *d;
+				if (c == '\n') {
+					if (linestart) {
+						line.append ((char *) linestart, d - linestart - ((lastchar == '\r') ? 1 : 0));
+					}
+					if (firstline) {
+						firstline = false;
+						linelen = line.length ();
+						bom1 = 0;
+						bom2 = 0;
+						bom3 = 0;
+						if (linelen >= 2) {
+							bom1 = line.at (0) & 0xFF;
+							bom2 = line.at (1) & 0xFF;
+						}
+						if (linelen >= 3) {
+							bom3 = line.at (2) & 0xFF;
+						}
+						if ((bom1 == 0xEF) && (bom2 == 0xBB) && (bom3 == 0xBF)) {
+							line = line.substr (3);
+						}
+					}
+					result = callback (callbackData, line);
+					line.assign ("");
+					linelen = 0;
+					linestart = NULL;
+					lastchar = 0;
+					if (result != OpResult::Success) {
+						break;
+					}
+				}
+				else {
+					if (! linestart) {
+						linestart = d;
+					}
+					++linelen;
+					lastchar = c;
+					if (linelen > maxLineLength) {
+						result = OpResult::MalformedDataError;
+						break;
+					}
+				}
+				++d;
+			}
+			if (result == OpResult::Success) {
+				if (linestart) {
+					line.append ((char *) linestart, end - linestart - ((lastchar == '\r') ? 1 : 0));
+				}
+			}
+		}
+		if ((readlen < (int) sizeof (data)) || (result != OpResult::Success)) {
+			break;
+		}
+	}
+	fclose (fp);
+	if ((result == OpResult::Success) && (! line.empty ())) {
+		result = callback (callbackData, line);
+	}
+	return (result);
 }
 
 OpResult OsUtil::writeFile (const StdString &path, Buffer *writeData, bool freeWriteData) {
@@ -871,7 +1006,7 @@ OpResult OsUtil::readRootPath (StringList *destList) {
 					break;
 				}
 				if ((drive.length () == 3) && (drive.at (1) == ':') && (drive.at (2) == '\\')) {
-					destList->append (drive.substr (0, 2));
+					destList->push_back (drive.substr (0, 2));
 				}
 
 				++drivelen;

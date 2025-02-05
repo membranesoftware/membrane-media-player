@@ -50,11 +50,12 @@ extern "C" {
 #include "UiText.h"
 #include "UiTextId.h"
 #include "MediaReader.h"
+#include "SubtitleReader.h"
 #include "SoundSample.h"
 #include "Log.h"
 #include "Video.h"
 
-constexpr const int64_t readaheadTime = 5000; // ms
+constexpr const int defaultReadaheadTime = 5000; // ms
 constexpr const int minDtsDelay = 10;
 constexpr const int maxDtsDelay = 2000;
 
@@ -69,13 +70,17 @@ Video::Video (double videoWidth, double videoHeight, int soundMixVolume, bool is
 , isPlayPresented (false)
 , playSeekPercent (0.0f)
 , playSeekTimestamp (0)
+, readaheadTime (defaultReadaheadTime)
 , isStopped (false)
 , isPaused (false)
 , isReadingPackets (false)
 , isFirstVideoFrameRendered (false)
 , isDroppingVideoFrames (false)
+, isReadEnded (false)
 , playTimestamp (0)
 , playDuration (0)
+, videoStreamDuration (0)
+, audioStreamDuration (0)
 , renderTargetWidth (0)
 , renderTargetHeight (0)
 , videoStreamFrameWidth (0)
@@ -85,6 +90,7 @@ Video::Video (double videoWidth, double videoHeight, int soundMixVolume, bool is
 , soundPlayerId (-1)
 , soundMixVolume (soundMixVolume)
 , isSoundMuted (isSoundMuted)
+, isSubtitleLoaded (false)
 , avioContext (NULL)
 , avFormatContext (NULL)
 , avPacket (NULL)
@@ -94,7 +100,6 @@ Video::Video (double videoWidth, double videoHeight, int soundMixVolume, bool is
 , videoStreamTimeBaseNum (0)
 , videoStreamTimeBaseDen (1)
 , videoStreamStartTime (0)
-, videoStreamDuration (0)
 , lastVideoFramePts (-1)
 , videoPacketDecodeCount (0)
 , videoFrameRenderCount (0)
@@ -119,7 +124,6 @@ Video::Video (double videoWidth, double videoHeight, int soundMixVolume, bool is
 , audioStreamTimeBaseNum (0)
 , audioStreamTimeBaseDen (1)
 , audioStreamStartTime (0)
-, audioStreamDuration (0)
 , audioStreamDecodedDuration (0)
 , audioPacketDecodeCount (0)
 , audioIconSprite (NULL)
@@ -142,7 +146,7 @@ Video::Video (double videoWidth, double videoHeight, int soundMixVolume, bool is
 	classId = ClassId::Video;
 	soundSample = new SoundSample (StdString::createSprintf ("*_Video_%llx", (long long int) App::instance->getUniqueId ()).c_str (), SoundMixer::instance->outputSampleRate, SoundMixer::instance->outputFormat, SoundMixer::instance->outputChannelCount);
 	soundSample->retain ();
-	resize (videoWidth, videoHeight);
+	setVideoSize (videoWidth, videoHeight);
 	renderPixelFormat = SDL_AllocFormat (SDL_PIXELFORMAT_RGBA32);
 
 	for (i = 0; i < Video::imageDataPlaneCount; ++i) {
@@ -192,11 +196,6 @@ Video::~Video () {
 
 Video *Video::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::Video) ? (Video *) widget : NULL);
-}
-
-StdString Video::toStringDetail () {
-	StdString s;
-	return (s);
 }
 
 void Video::clearPlay () {
@@ -311,7 +310,7 @@ void Video::pause () {
 	}
 }
 
-void Video::resize (double videoWidth, double videoHeight) {
+void Video::setVideoSize (double videoWidth, double videoHeight) {
 	width = floor (videoWidth);
 	height = floor (videoHeight);
 	if (width < 1.0f) {
@@ -432,6 +431,8 @@ void Video::play (Widget::EventCallbackContext endCallback) {
 	firstSeekFrameTimestamp = 0;
 	isDroppingVideoFrames = false;
 	isRenderingVideoFrame = false;
+	isReadEnded = false;
+	isSubtitleLoaded = false;
 	playPositionStream = -1;
 	lastVideoFramePts = -1;
 	renderTargetWidth = (int) width;
@@ -655,6 +656,8 @@ void Video::executeReadPackets () {
 		}
 	}
 
+	readSubtitles ();
+
 	playTimestamp = 0;
 	firstSeekFrameTimestamp = 0;
 	isFirstSeekFrameFound = false;
@@ -760,6 +763,7 @@ void Video::executeReadPackets () {
 		}
 		av_packet_unref (avPacket);
 	}
+	isReadEnded = true;
 	endAudioStream ();
 }
 
@@ -790,7 +794,10 @@ void Video::decodeVideoPacket () {
 		}
 	}
 
-	delta = dts - playts - readaheadTime;
+	delta = 0;
+	if (isFirstVideoFrameRendered) {
+		delta = dts - playts - readaheadTime;
+	}
 	while (delta >= minDtsDelay) {
 		if (isStopped || isPlayFailed) {
 			return;
@@ -921,12 +928,15 @@ void Video::decodeAudioPacket () {
 	}
 	if (playPositionStream == audioStream) {
 		isPlayPresented = true;
-		if (soundSample->lastFramePts < readaheadTime) {
-			playTimestamp = firstSeekFrameTimestamp - formatStartTime;
-		}
-		else {
-			playTimestamp = soundSample->lastFramePts - readaheadTime - audioStreamStartTime;
-		}
+	}
+	if (soundSample->lastFramePts < readaheadTime) {
+		playts = firstSeekFrameTimestamp - formatStartTime;
+	}
+	else {
+		playts = soundSample->lastFramePts - readaheadTime - audioStreamStartTime;
+	}
+	if (playTimestamp < playts) {
+		playTimestamp = playts;
 	}
 }
 
@@ -1114,6 +1124,7 @@ void Video::executeRenderFrame () {
 	uint8_t *src, *dst, *dstpixels;
 	int srcpitch, dstpitch, cpsize, x, y, y2;
 	Uint32 pixel;
+	int64_t playts;
 
 	buffer = NULL;
 	SDL_LockMutex (framesMutex);
@@ -1229,7 +1240,10 @@ void Video::executeRenderFrame () {
 	isRenderingVideoFrame = false;
 	if (playPositionStream == videoStream) {
 		isPlayPresented = true;
-		playTimestamp = frame.pts - formatStartTime;
+	}
+	playts = frame.pts - formatStartTime;
+	if (playTimestamp < playts) {
+		playTimestamp = playts;
 	}
 	SDL_LockMutex (framesMutex);
 	SDL_CondBroadcast (framesCond);
@@ -1293,6 +1307,43 @@ void Video::resetAudioDisplayTextureDrawSize () {
 	}
 	audioDisplayTextureDrawWidth = (int) w;
 	audioDisplayTextureDrawHeight = (int) h;
+}
+
+void Video::readSubtitles () {
+	StdString path;
+	OpResult result;
+
+	if (playPath.empty ()) {
+		subtitle.setFilePath (StdString ());
+		return;
+	}
+	path.assign (OsUtil::getReplaceExtensionPath (playPath, StdString (SubtitleReader::srtExtension)));
+	subtitle.setFilePath (path);
+	result = subtitle.readSubtitles ();
+	if (result == OpResult::FileOpenFailedError) {
+		path.assign (OsUtil::getAppendExtensionPath (playPath, StdString (SubtitleReader::srtExtension)));
+		subtitle.setFilePath (path);
+		result = subtitle.readSubtitles ();
+	}
+	if (result != OpResult::Success) {
+		isSubtitleLoaded = false;
+	}
+	else {
+		isSubtitleLoaded = true;
+	}
+}
+
+StdString Video::getSubtitleText () {
+	int n;
+
+	if ((! isSubtitleLoaded) || (! isPlaying)) {
+		return (StdString ());
+	}
+	n = subtitle.findEntry (playTimestamp);
+	if (n < 0) {
+		return (StdString ());
+	}
+	return (subtitle.entryList.at (n).text);
 }
 
 void Video::doUpdate (int msElapsed) {

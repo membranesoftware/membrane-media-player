@@ -45,7 +45,6 @@
 #include "Log.h"
 #include "LuaScript.h"
 #include "OsUtil.h"
-#include "MathUtil.h"
 #include "SdlUtil.h"
 #include "Ui.h"
 #include "UiConfiguration.h"
@@ -469,7 +468,7 @@ int App::runWindow () {
 	populateWidgets ();
 	UiStack::instance->setUi (appUtil.createMainUi ());
 	isUpdateThreadEnded = false;
-	thread = SDL_CreateThread (App::runUpdateThread, "runUpdateThread", (void *) this);
+	thread = SDL_CreateThread (App::runUpdates, "App::runUpdates", (void *) this);
 	Log::info ("Application started; buildId=%s windowSize=%ix%i drawableSize=%ix%i isFullscreen=%s lang=%s pid=%i", BUILD_ID, windowWidth, windowHeight, (int) drawableWidth, (int) drawableHeight, BOOL_STRING (isFullscreen), language.c_str (), OsUtil::getProcessId ());
 	SDL_VERSION (&version1);
 	SDL_GetVersion (&version2);
@@ -636,7 +635,7 @@ void App::draw () {
 	++drawCount;
 }
 
-int App::runUpdateThread (void *itPtr) {
+int App::runUpdates (void *itPtr) {
 	App *it = (App *) itPtr;
 	StdString line;
 	int64_t t1, t2, last;

@@ -60,9 +60,12 @@ public:
 		TitleFont = 3,
 		HeadlineFont = 4,
 		ConsoleFont = 5,
+		SmallSubtitleFont = 6,
+		MediumSubtitleFont = 7,
+		LargeSubtitleFont = 8,
 		NoFont = -1
 	};
-	static constexpr const int FontCount = 6;
+	static constexpr const int FontCount = 9;
 
 	// Load resources referenced by the UiConfiguration and return a result value
 	OpResult load (double fontScale = 1.0f);

@@ -101,11 +101,6 @@ MediaItemDetailWindow *MediaItemDetailWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::MediaItemDetailWindow) ? (MediaItemDetailWindow *) widget : NULL);
 }
 
-StdString MediaItemDetailWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void MediaItemDetailWindow::refreshDetailSize () {
 	if (detailSize == Ui::SmallSize) {
 		nameFont = UiConfiguration::CaptionFont;

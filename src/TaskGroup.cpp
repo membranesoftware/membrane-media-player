@@ -41,6 +41,7 @@ TaskGroup::TaskGroup ()
 , isStopped (false)
 , runCount (0)
 , threadCount (0)
+, nextThreadIndex (1)
 {
 	SdlUtil::createMutex (&contextListMutex);
 }
@@ -112,7 +113,8 @@ void TaskGroup::update (int msElapsed) {
 		if (shouldrun) {
 			i1->isRunning = true;
 			++threadCount;
-			i1->thread = SDL_CreateThread (TaskGroup::executeTask, "TaskGroup::executeTask", (void *) &(*i1));
+			i1->thread = SDL_CreateThread (TaskGroup::executeTask, StdString::createSprintf ("TaskGroup::executeTask %i", nextThreadIndex).c_str (), (void *) &(*i1));
+			++nextThreadIndex;
 		}
 		++i1;
 	}

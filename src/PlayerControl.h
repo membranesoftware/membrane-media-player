@@ -51,6 +51,8 @@ public:
 	// Read-write data members
 	int playerSoundMixVolume;
 	bool isPlayerSoundMuted;
+	int playerVisualizerType;
+	bool playerSubtitleEnabled;
 
 	// Read-only data members
 	bool isFullscreenPlaying;
@@ -101,6 +103,7 @@ private:
 	// Callback functions
 	static void playerDetachClicked (void *itPtr, Widget *widgetPtr);
 	static void playerMaximizeClicked (void *itPtr, Widget *widgetPtr);
+	static void playerSettingsChanged (void *itPtr, Widget *widgetPtr);
 
 	// Return a newly created PlayerWindow widget that has been added to the view
 	PlayerWindow *createPlayerWindow (bool isDetached);

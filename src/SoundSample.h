@@ -43,7 +43,7 @@ extern "C" {
 }
 #include "MediaUtil.h"
 
-class Buffer;
+class SharedBuffer;
 
 class SoundSample {
 public:
@@ -54,7 +54,7 @@ public:
 		int id;
 		int64_t pts;
 		int64_t duration;
-		Buffer *sampleData;
+		SharedBuffer *sampleData;
 
 		AudioFrame ():
 			id (0),

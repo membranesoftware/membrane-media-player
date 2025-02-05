@@ -57,7 +57,6 @@ public:
 
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	bool doProcessMouseState (const Widget::MouseState &mouseState);
 	void refreshDetailSize ();
 

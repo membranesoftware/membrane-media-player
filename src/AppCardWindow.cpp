@@ -152,8 +152,14 @@ AppCardWindow::AppCardWindow ()
 	updateText->isVisible = false;
 
 	updateLink = (HyperlinkWindow *) addWidget (new HyperlinkWindow ());
+	updateLink->linkOpenCallback = Widget::EventCallbackContext (AppCardWindow::updateLinkOpened, this);
 	updateLink->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
 	updateLink->isVisible = false;
+
+	headerUpdateIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateIcon)), 1);
+	headerUpdateIcon->setDrawColor (true, UiConfiguration::instance->statusOkTextColor);
+	headerUpdateIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::UpdateFoundPrompt));
+	headerUpdateIcon->isVisible = false;
 
 	infoIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_messageIcon)));
 	infoIcon->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
@@ -262,6 +268,7 @@ void AppCardWindow::resetUpdateVisible () {
 	updateProgressBar->isVisible = isExpanded && isShowingUpdateRow && isCheckingForUpdates;
 	updateText->isVisible = isExpanded && isShowingUpdateRow;
 	updateLink->isVisible = isExpanded && isShowingUpdateRow && isShowingUpdateLink;
+	headerUpdateIcon->isVisible = (! isExpanded) && isShowingUpdateRow && isShowingUpdateLink;
 }
 
 void AppCardWindow::readNewsState (AppNews::NewsState *state) {
@@ -281,7 +288,7 @@ void AppCardWindow::readNewsState (AppNews::NewsState *state) {
 	}
 	SDL_UnlockMutex (newsPostMutex);
 
-	if ((! state->updateBuildId.empty ()) && (state->updatePublishTime > 0)) {
+	if ((! state->updateBuildId.empty ()) && (state->updatePublishTime > 0) && state->recordBuildId.equals (BUILD_ID)) {
 		updateText->setText (UiText::instance->getText (UiTextId::UpdateFoundPrompt));
 		updateLink->setLink (StdString::createSprintf ("%s, %s", state->updateBuildId.c_str (), UiText::instance->getDateText (state->updatePublishTime).c_str ()), AppUrl::instance->update (StdString::createSprintf ("%s_%s", BUILD_ID, PLATFORM_ID)));
 		isShowingUpdateLink = true;
@@ -304,6 +311,9 @@ void AppCardWindow::reflow () {
 
 	headerIcon->flowRight (&layoutFlow);
 	progressRingPanel->position.assign (headerIcon->position.x + (headerIcon->width / 2.0f) - (progressRingPanel->width / 2.0f), headerIcon->position.y + (headerIcon->height / 2.0f) - (progressRingPanel->height / 2.0f));
+	if (headerUpdateIcon->isVisible) {
+		headerUpdateIcon->flowRight (&layoutFlow);
+	}
 
 	if (isExpanded) {
 		nameLabel->flowDown (&layoutFlow);
@@ -368,6 +378,9 @@ void AppCardWindow::reflow () {
 
 	if (updateProgressBar->isVisible) {
 		updateProgressBar->setSize (width * progressBarScale, UiConfiguration::instance->progressBarHeight);
+	}
+	if (headerUpdateIcon->isVisible) {
+		headerUpdateIcon->position.assignY ((height / 2.0f) - (headerUpdateIcon->height / 2.0f));
 	}
 
 	bottomRightLayoutFlow ();
@@ -597,6 +610,7 @@ void AppCardWindow::checkForUpdates () {
 		delete (updateNewsState);
 	}
 	updateNewsState = new AppNews::NewsState ();
+	updateNewsState->recordBuildId.assign (BUILD_ID);
 	isCheckingForUpdates = true;
 	isUpdateNewsReceived = false;
 	updateText->setText (UiText::instance->getText (UiTextId::CheckingForUpdates).capitalized ());
@@ -665,4 +679,15 @@ void AppCardWindow::executeShowUpdateResult () {
 	resetUpdateVisible ();
 	reflow ();
 	eventCallback (layoutChangeCallback);
+}
+
+void AppCardWindow::updateLinkOpened (void *itPtr, Widget *widgetPtr) {
+	HyperlinkWindow *hyperlink = (HyperlinkWindow *) widgetPtr;
+
+	if (hyperlink->linkOpenResult != OpResult::Success) {
+		App::instance->showNotification (UiText::instance->getText (UiTextId::OpenUpdateUrlError));
+	}
+	else {
+		App::instance->showNotification (UiText::instance->getText (UiTextId::OpenUpdateUrlCompleteText));
+	}
 }

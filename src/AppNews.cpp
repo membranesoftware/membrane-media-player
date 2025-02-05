@@ -43,12 +43,11 @@
 
 AppNews *AppNews::instance = NULL;
 
-constexpr const char *createTableSql = "CREATE TABLE IF NOT EXISTS AppNews(record TEXT);";
-constexpr const char *metadataTableName = "AppNewsMetadata";
-constexpr const int metadataVersion = 1;
+constexpr const char *createTableSql = "CREATE TABLE IF NOT EXISTS AppNews(record TEXT, buildId TEXT);";
 
 AppNews::AppNews ()
 : isReady (false)
+, isLoading (false)
 , isLoadFailed (false)
 , isDatabaseOpen (false) {
 	SdlUtil::createMutex (&databaseMutex);
@@ -84,20 +83,25 @@ void AppNews::configure (const StdString &databasePathValue) {
 		isDatabaseOpen = false;
 	}
 	databasePath.assign (databasePathValue);
+	isReady = false;
+	isLoadFailed = false;
+	isLoading = true;
 	TaskGroup::instance->run (TaskGroup::RunContext (AppNews::initialize, this));
 }
 
 void AppNews::initialize (void *itPtr) {
+	AppNews *it = (AppNews *) itPtr;
 	OpResult result;
 
-	result = ((AppNews *) itPtr)->executeInitialize ();
+	result = it->executeInitialize ();
 	if (result != OpResult::Success) {
 		Log::debug ("Failed to initialize app data; err=%i", result);
 	}
+	it->isLoading = false;
 }
 OpResult AppNews::executeInitialize () {
 	OpResult result;
-	int version;
+	StdString errmsg;
 
 	if (databasePath.empty ()) {
 		return (OpResult::InvalidConfigurationError);
@@ -108,12 +112,12 @@ OpResult AppNews::executeInitialize () {
 		result = Database::instance->exec (databasePath, createTableSql);
 	}
 	if (result == OpResult::Success) {
-		result = Database::instance->createMetadataTable (databasePath, StdString (metadataTableName));
+		result = Database::instance->createMetadataTable (databasePath, StdString (AppNews::metadataTableName));
 	}
 	if (result == OpResult::Success) {
-		version = Database::instance->readMetadataVersion (databasePath, StdString (metadataTableName));
-		if (version < metadataVersion) {
-			Database::instance->writeMetadataVersion (databasePath, StdString (metadataTableName), metadataVersion);
+		result = updateSchema (&errmsg);
+		if (result != OpResult::Success) {
+			Log::debug ("Failed to initialize app data; err=%i err=%s", result, errmsg.c_str ());
 		}
 	}
 
@@ -126,6 +130,34 @@ OpResult AppNews::executeInitialize () {
 		isLoadFailed = true;
 	}
 	return (result);
+}
+OpResult AppNews::updateSchema (StdString *errorMessage) {
+	OpResult result;
+	int version;
+
+	version = Database::instance->readMetadataVersion (databasePath, StdString (AppNews::metadataTableName));
+	if (version >= AppNews::metadataVersion) {
+		return (OpResult::Success);
+	}
+	if (version == 1) {
+		result = Database::instance->exec (databasePath, StdString ("ALTER TABLE AppNews ADD COLUMN buildId TEXT;"), errorMessage);
+		if (result != OpResult::Success) {
+			return (result);
+		}
+		result = Database::instance->exec (databasePath, StdString ("UPDATE AppNews SET buildId='';"), errorMessage);
+		if (result != OpResult::Success) {
+			return (result);
+		}
+		++version;
+	}
+	result = Database::instance->writeMetadataVersion (databasePath, StdString (AppNews::metadataTableName), AppNews::metadataVersion);
+	if (result != OpResult::Success) {
+		if (errorMessage) {
+			errorMessage->assign ("Schema update failed");
+		}
+		return (result);
+	}
+	return (OpResult::Success);
 }
 
 bool AppNews::parseCommand (const StdString &command, AppNews::NewsState *state) {
@@ -167,7 +199,7 @@ void AppNews::parseCommandParams (Json *params, AppNews::NewsState *state) {
 }
 
 OpResult AppNews::writeRecord (const StdString &command) {
-	StringList sql;
+	StringList sql, cols;
 	StringList::const_iterator i1, i2;
 	StdString s, recordtext, errmsg;
 	OpResult result;
@@ -192,8 +224,12 @@ OpResult AppNews::writeRecord (const StdString &command) {
 	}
 
 	sql.push_back ("DELETE FROM AppNews;");
+	cols.push_back ("record");
+	cols.push_back (Database::getColumnValueSql (recordtext));
+	cols.push_back ("buildId");
+	cols.push_back (Database::getColumnValueSql (StdString (BUILD_ID)));
 	s.assign ("INSERT INTO ");
-	s.append (Database::getRowInsertSql (StdString ("AppNews"), StringList (StdString ("record"), Database::getColumnValueSql (recordtext))));
+	s.append (Database::getRowInsertSql (StdString ("AppNews"), cols));
 	s.append (";");
 	sql.push_back (s);
 	sql.push_back ("COMMIT;");
@@ -222,7 +258,8 @@ OpResult AppNews::writeRecord (const StdString &command) {
 }
 
 bool AppNews::readRecord (AppNews::NewsState *state) {
-	StdString sql, errmsg, text;
+	StdString sql, errmsg;
+	StringList cols;
 	OpResult result;
 	Json params;
 
@@ -230,24 +267,31 @@ bool AppNews::readRecord (AppNews::NewsState *state) {
 		return (false);
 	}
 	state->posts.clear ();
-	sql.assign ("SELECT record FROM AppNews LIMIT 1;");
+	sql.assign ("SELECT record, buildId FROM AppNews LIMIT 1;");
 	SDL_LockMutex (databaseMutex);
-	result = Database::instance->exec (databasePath, sql, &errmsg, AppNews::readRecord_row, &text);
+	result = Database::instance->exec (databasePath, sql, &errmsg, AppNews::readRecord_row, &cols);
 	SDL_UnlockMutex (databaseMutex);
 
 	if (result != OpResult::Success) {
 		Log::debug ("Failed to read app data; err=%s", errmsg.c_str ());
 	}
-	if (text.empty () || (! params.parse (text))) {
+	if (cols.size () < 2) {
+		return (false);
+	}
+	if (! params.parse (cols.at (0))) {
 		return (false);
 	}
 	parseCommandParams (&params, state);
+	state->recordBuildId.assign (cols.at (1));
 	return (true);
 }
-int AppNews::readRecord_row (void *stringPtr, int columnCount, char **columnValues, char **columnNames) {
-	if (columnCount < 1) {
+int AppNews::readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames) {
+	StringList *s = (StringList *) stringListPtr;
+
+	if (columnCount < 2) {
 		return (-1);
 	}
-	((StdString *) stringPtr)->assign (columnValues[0]);
+	s->push_back (columnValues[0]);
+	s->push_back (columnValues[1]);
 	return (0);
 }

@@ -163,6 +163,15 @@ UiConfiguration::UiConfiguration ()
 
 	fontNames[UiConfiguration::ConsoleFont].assign ("font/IBMPlexMono-Regular.ttf");
 	fontBaseSizes[UiConfiguration::ConsoleFont] = 10;
+
+	fontNames[UiConfiguration::SmallSubtitleFont].assign ("font/Domine-SemiBold.ttf");
+	fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 10;
+
+	fontNames[UiConfiguration::MediumSubtitleFont].assign ("font/Domine-SemiBold.ttf");
+	fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 14;
+
+	fontNames[UiConfiguration::LargeSubtitleFont].assign ("font/Domine-Bold.ttf");
+	fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 24;
 }
 UiConfiguration::~UiConfiguration () {
 	unload ();
@@ -335,6 +344,9 @@ void UiConfiguration::resetScale () {
 		fontBaseSizes[UiConfiguration::TitleFont] = 12;
 		fontBaseSizes[UiConfiguration::HeadlineFont] = 14;
 		fontBaseSizes[UiConfiguration::ConsoleFont] = 8;
+		fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 7;
+		fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 10;
+		fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 22;
 	}
 	else if (App::instance->windowHeight <= 576) {
 		paddingSize = 12.0f;
@@ -354,6 +366,9 @@ void UiConfiguration::resetScale () {
 		fontBaseSizes[UiConfiguration::TitleFont] = 12;
 		fontBaseSizes[UiConfiguration::HeadlineFont] = 14;
 		fontBaseSizes[UiConfiguration::ConsoleFont] = 8;
+		fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 8;
+		fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 10;
+		fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 22;
 	}
 	else if (App::instance->windowHeight <= 720) {
 		paddingSize = 12.0f;
@@ -373,6 +388,9 @@ void UiConfiguration::resetScale () {
 		fontBaseSizes[UiConfiguration::TitleFont] = 14;
 		fontBaseSizes[UiConfiguration::HeadlineFont] = 16;
 		fontBaseSizes[UiConfiguration::ConsoleFont] = 10;
+		fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 10;
+		fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 14;
+		fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 24;
 	}
 	else if (App::instance->windowHeight <= 900) {
 		paddingSize = 16.0f;
@@ -392,6 +410,9 @@ void UiConfiguration::resetScale () {
 		fontBaseSizes[UiConfiguration::TitleFont] = 16;
 		fontBaseSizes[UiConfiguration::HeadlineFont] = 20;
 		fontBaseSizes[UiConfiguration::ConsoleFont] = 10;
+		fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 10;
+		fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 16;
+		fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 28;
 	}
 	else {
 		paddingSize = 20.0f;
@@ -411,5 +432,8 @@ void UiConfiguration::resetScale () {
 		fontBaseSizes[UiConfiguration::TitleFont] = 18;
 		fontBaseSizes[UiConfiguration::HeadlineFont] = 22;
 		fontBaseSizes[UiConfiguration::ConsoleFont] = 12;
+		fontBaseSizes[UiConfiguration::SmallSubtitleFont] = 12;
+		fontBaseSizes[UiConfiguration::MediumSubtitleFont] = 18;
+		fontBaseSizes[UiConfiguration::LargeSubtitleFont] = 32;
 	}
 }

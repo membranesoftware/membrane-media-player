@@ -72,6 +72,8 @@ static const int fullscreenPlayerRowSizes[PlayerControl::maxPlayerCount][maxFull
 PlayerControl::PlayerControl ()
 : playerSoundMixVolume (SoundMixer::maxMixVolume)
 , isPlayerSoundMuted (false)
+, playerVisualizerType (PlayerWindow::NoVisualizer)
+, playerSubtitleEnabled (true)
 , isFullscreenPlaying (false)
 , mainPlayerHandle (&mainPlayer)
 , lastZLevelStart (0)
@@ -320,6 +322,9 @@ PlayerWindow *PlayerControl::createPlayerWindow (bool isDetached) {
 		player->detachCallback = Widget::EventCallbackContext (PlayerControl::playerDetachClicked, this);
 	}
 	player->maximizeCallback = Widget::EventCallbackContext (PlayerControl::playerMaximizeClicked, this);
+	player->setVisualizerType (playerVisualizerType);
+	player->setSubtitleEnabled (playerSubtitleEnabled);
+	player->settingsChangeCallback = Widget::EventCallbackContext (PlayerControl::playerSettingsChanged, this);
 
 	SDL_LockMutex (playersMutex);
 	players.push_back (player);
@@ -344,9 +349,8 @@ void PlayerControl::playerDetachClicked (void *itPtr, Widget *widgetPtr) {
 
 void PlayerControl::playerMaximizeClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerControl *it = (PlayerControl *) itPtr;
-	PlayerWindow *player;
+	PlayerWindow *player = (PlayerWindow *) widgetPtr;
 
-	player = (PlayerWindow *) widgetPtr;
 	if (! player->isMaximized) {
 		player->maximize (App::instance->drawableWidth, App::instance->drawableHeight - UiStack::instance->topBarHeight - UiStack::instance->bottomBarHeight, Position (0.0f, UiStack::instance->topBarHeight), false);
 	}
@@ -357,6 +361,16 @@ void PlayerControl::playerMaximizeClicked (void *itPtr, Widget *widgetPtr) {
 	it->assignPlayerZLevels (it->lastZLevelStart);
 }
 
+void PlayerControl::playerSettingsChanged (void *itPtr, Widget *widgetPtr) {
+	PlayerControl *it = (PlayerControl *) itPtr;
+	PlayerWindow *player = (PlayerWindow *) widgetPtr;
+
+	it->playerSoundMixVolume = player->soundMixVolume;
+	it->isPlayerSoundMuted = player->isSoundMuted;
+	it->playerVisualizerType = player->visualizerType;
+	it->playerSubtitleEnabled = player->isSubtitleEnabled;
+}
+
 void PlayerControl::update (int msElapsed) {
 	std::list<PlayerWindow *>::iterator i1, i2;
 	std::list<MediaPlaylistWindow *>::iterator j1, j2;
@@ -365,10 +379,6 @@ void PlayerControl::update (int msElapsed) {
 	bool reposition, found;
 
 	mainPlayerHandle.compact ();
-	if (mainPlayer) {
-		playerSoundMixVolume = mainPlayer->soundMixVolume;
-		isPlayerSoundMuted = mainPlayer->isSoundMuted;
-	}
 
 	SDL_LockMutex (playlistsMutex);
 	j1 = playlists.begin ();

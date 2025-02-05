@@ -40,6 +40,7 @@ extern "C" {
 #include "libswscale/swscale.h"
 }
 #include "MediaUtil.h"
+#include "SubtitleReader.h"
 #include "SoundMixer.h"
 #include "Color.h"
 #include "Widget.h"
@@ -71,13 +72,17 @@ public:
 	StdString lastErrorMessage;
 	double playSeekPercent;
 	int64_t playSeekTimestamp;
+	int readaheadTime;
 	bool isStopped;
 	bool isPaused;
 	bool isReadingPackets;
 	bool isFirstVideoFrameRendered;
 	bool isDroppingVideoFrames;
+	bool isReadEnded;
 	int64_t playTimestamp;
 	int64_t playDuration;
+	int64_t videoStreamDuration;
+	int64_t audioStreamDuration;
 	int renderTargetWidth;
 	int renderTargetHeight;
 	int videoStreamFrameWidth;
@@ -87,6 +92,7 @@ public:
 	int64_t soundPlayerId;
 	int soundMixVolume;
 	bool isSoundMuted;
+	bool isSubtitleLoaded;
 
 	// Set the play path targeted by the video
 	void setPlayPath (const StdString &playPathValue, bool isResourcePlayPathValue = false);
@@ -105,7 +111,7 @@ public:
 	void pause ();
 
 	// Set the size of the video's render frame
-	void resize (double videoWidth, double videoHeight);
+	void setVideoSize (double videoWidth, double videoHeight);
 
 	// Set the video's sound mix volume
 	void setSoundMixVolume (int volume);
@@ -119,9 +125,11 @@ public:
 	// Set a sprite that should be shown by the video when playing an audio file without an album art image
 	void setAudioIcon (Sprite *iconSprite, const Color &iconDrawColor = Color (0.0f, 0.0f, 0.0f, 0.0f));
 
+	// Return a string containing subtitle text for the current play timestamp, or an empty string if no subtitle was found
+	StdString getSubtitleText ();
+
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	void doUpdate (int msElapsed);
 	void doDraw (double originX, double originY);
 
@@ -192,6 +200,9 @@ private:
 	static void renderFrame (void *itPtr);
 	void executeRenderFrame ();
 
+	// Find subtitle files associated with the current play path and read subtitle entries if found
+	void readSubtitles ();
+
 	static constexpr const int imageDataPlaneCount = 4;
 
 	Position translateAlphaValue;
@@ -204,7 +215,6 @@ private:
 	int64_t videoStreamTimeBaseNum;
 	int64_t videoStreamTimeBaseDen;
 	int64_t videoStreamStartTime;
-	int64_t videoStreamDuration;
 	int64_t lastVideoFramePts;
 	int videoPacketDecodeCount;
 	int videoFrameRenderCount;
@@ -236,7 +246,6 @@ private:
 	int64_t audioStreamTimeBaseNum;
 	int64_t audioStreamTimeBaseDen;
 	int64_t audioStreamStartTime;
-	int64_t audioStreamDuration;
 	int64_t audioStreamDecodedDuration;
 	int audioPacketDecodeCount;
 	Sprite *audioIconSprite;
@@ -249,6 +258,7 @@ private:
 	int audioDisplayTextureDrawHeight;
 	SDL_mutex *audioDisplayTextureMutex;
 	bool isAudioDisplayEnabled;
+	SubtitleReader subtitle;
 	int playPositionStream;
 	int64_t playReferenceTime;
 	int64_t pauseTime;

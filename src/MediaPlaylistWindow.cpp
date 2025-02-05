@@ -223,11 +223,6 @@ MediaPlaylistWindow *MediaPlaylistWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::MediaPlaylistWindow) ? (MediaPlaylistWindow *) widget : NULL);
 }
 
-StdString MediaPlaylistWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void MediaPlaylistWindow::resetPlaylistId () {
 	playlist.id = RecordStore::instance->getRecordId (MediaPlaylist::idCommandType);
 }
@@ -259,6 +254,9 @@ void MediaPlaylistWindow::setShuffle (bool shuffle) {
 	}
 	playlist.isShuffle = shuffle;
 	shuffleToggle->setChecked (playlist.isShuffle, true);
+	if (isExecuting) {
+		shouldResetPlayItemIds = true;
+	}
 }
 
 void MediaPlaylistWindow::setStartPosition (int startPosition) {
@@ -808,6 +806,9 @@ void MediaPlaylistWindow::shuffleToggleStateChanged (void *itPtr, Widget *widget
 	ToggleWindow *toggle = (ToggleWindow *) widgetPtr;
 
 	it->playlist.isShuffle = toggle->isChecked;
+	if (it->isExecuting) {
+		it->shouldResetPlayItemIds = true;
+	}
 	it->eventCallback (it->optionChangeCallback);
 }
 

@@ -39,7 +39,7 @@ extern "C" {
 }
 #include "SoundSample.h"
 
-class Buffer;
+class SharedBuffer;
 
 class SoundMixer {
 public:
@@ -54,6 +54,18 @@ public:
 	static void freeInstance ();
 
 	static constexpr const int maxMixVolume = 10000;
+
+	typedef void (*OutputCallback) (void *itPtr, SharedBuffer *sampleData, int playerWriteDelta);
+	struct OutputCallbackContext {
+		SoundMixer::OutputCallback callback;
+		void *callbackData;
+		OutputCallbackContext ():
+			callback (NULL),
+			callbackData (NULL) { }
+		OutputCallbackContext (SoundMixer::OutputCallback callback, void *callbackData):
+			callback (callback),
+			callbackData (callbackData) { }
+	};
 
 	// Read-write data members
 	int deviceWritePeriod; // milliseconds
@@ -90,10 +102,13 @@ public:
 	void unloadSample (const char *soundId);
 
 	// Execute a play operation for the specified sample and return the created player ID, or a negative value if the player could not be created
-	int64_t playResourceSample (const char *soundId, int mixVolume = SoundMixer::maxMixVolume, bool muted = false);
+	int64_t playResourceSample (const char *soundId, int mixVolume = SoundMixer::maxMixVolume, bool muted = false, SoundMixer::OutputCallbackContext outputCallback = SoundMixer::OutputCallbackContext ());
 
 	// Execute a play operation for the specified sample and return the created player ID, or a negative value if the player could not be created
-	int64_t playLiveSample (SoundSample *sample, int mixVolume = SoundMixer::maxMixVolume, bool muted = false);
+	int64_t playLiveSample (SoundSample *sample, int mixVolume = SoundMixer::maxMixVolume, bool muted = false, SoundMixer::OutputCallbackContext outputCallback = SoundMixer::OutputCallbackContext ());
+
+	// Return true if playerId matches an active player
+	bool isPlayerActive (int64_t playerId);
 
 	// Stop playback for the specified player ID
 	void stopPlayer (int64_t playerId);
@@ -108,6 +123,9 @@ public:
 	// Set the mix volume level for the specified player ID
 	void setPlayerMixVolume (int64_t playerId, int mixVolume);
 
+	// Set the audio callback for the specified player ID
+	void setOutputCallback (int64_t playerId, SoundMixer::OutputCallbackContext callback);
+
 private:
 	struct Player {
 		int64_t id;
@@ -117,6 +135,11 @@ private:
 		int64_t nextReadTime;
 		int64_t lastPts;
 		bool isEnded;
+		SoundMixer::OutputCallbackContext outputCallback;
+		std::queue<SharedBuffer *> outputSampleQueue;
+		int64_t outputQueueWritePosition;
+		int64_t outputReadPosition;
+		bool isOutputReadaheadComplete;
 
 		Player ():
 			id (-1),
@@ -125,20 +148,29 @@ private:
 			startTime (0),
 			nextReadTime (0),
 			lastPts (AV_NOPTS_VALUE),
-			isEnded (false) { }
-		Player (int64_t id, SoundSample *sample, bool isLive):
+			isEnded (false),
+			outputQueueWritePosition (0),
+			outputReadPosition (0),
+			isOutputReadaheadComplete (false) { }
+		Player (int64_t id, SoundSample *sample, bool isLive, SoundMixer::OutputCallbackContext outputCallback):
 			id (id),
 			sample (sample),
 			isLive (isLive),
 			startTime (0),
 			nextReadTime (0),
 			lastPts (AV_NOPTS_VALUE),
-			isEnded (false) { }
+			isEnded (false),
+			outputCallback (outputCallback),
+			outputQueueWritePosition (0),
+			outputReadPosition (0),
+			isOutputReadaheadComplete (false) { }
 	};
 
 	struct PlayerQueue {
-		std::queue<Buffer *> sampleQueue;
-		int position;
+		std::queue<SharedBuffer *> sampleQueue;
+		int64_t sampleQueueSize;
+		int64_t writePosition;
+		int bufferPosition;
 		bool isLive;
 		bool isPaused;
 		int mixVolume;
@@ -146,7 +178,9 @@ private:
 		bool isEnded;
 
 		PlayerQueue (bool isLive, int mixVolume, bool isMuted):
-			position (0),
+			sampleQueueSize (0),
+			writePosition (0),
+			bufferPosition (0),
 			isLive (isLive),
 			isPaused (false),
 			mixVolume (mixVolume),
@@ -155,10 +189,8 @@ private:
 	};
 
 	// Run a thread that reads sample data from active players
-	static int runPlayerThread (void *itPtr);
-
-	// Execute the player update loop
-	void executePlayerUpdate ();
+	static int runPlayers (void *itPtr);
+	void executeRunPlayers ();
 
 	// SDL_AudioCallback
 	static void audioCallback (void *userdata, Uint8 *stream, int len);
@@ -178,23 +210,29 @@ private:
 	// Clear the sample map
 	void clearSampleMap ();
 
-	// Clear the player map
-	void clearPlayerMap ();
-
 	// Clear the player queue map
-	void clearQueueMap ();
+	void clearPlayerQueueMap ();
 
 	// Clear the contents of a PlayerQueue object
 	void clearPlayerQueue (SoundMixer::PlayerQueue *playerQueue);
 
+	// Clear the player map
+	void clearPlayerMap ();
+
+	// Clear the contents of a Player object
+	void clearPlayer (SoundMixer::Player *player);
+
+	// Clear the contents of a Player object's output sample queue
+	void clearPlayerOutputSamples (SoundMixer::Player *player);
+
 	// Advance player state during the player update loop
 	void updatePlayer (SoundMixer::Player *player);
+	void executeOutputCallback (SoundMixer::Player *player);
 
 	SDL_Thread *playerThread;
 	bool isPlayerThreadRunning;
 	SDL_mutex *playerMutex;
 	SDL_cond *playerCond;
-	int64_t playerUpdateTime;
 	SoundMixer::MixFunction mixFn;
 	std::map<StdString, SoundSample *> sampleMap;
 	std::map<int64_t, SoundMixer::Player> playerMap;

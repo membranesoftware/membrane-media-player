@@ -45,7 +45,6 @@ public:
 	Widget ();
 	virtual ~Widget ();
 
-	typedef bool (*FindMatchFunction) (void *data, Widget *itemWidget);
 	typedef void (*UpdateCallback) (void *data, int msElapsed, Widget *widget);
 	typedef void (*EventCallback) (void *data, Widget *widget);
 	typedef bool (*KeyEventCallback) (void *data, SDL_Keycode keycode, bool isShiftDown, bool isControlDown);
@@ -183,6 +182,7 @@ public:
 	// Return the child widget that holds a matching widgetName value, or NULL if no such widget was found. If shouldRetain is true, retain any matched widget before returning it and the caller is responsible for releasing it.
 	virtual Widget *findWidget (const StdString &widgetName, bool shouldRetain = false);
 
+	typedef bool (*FindMatchFunction) (void *data, Widget *itemWidget);
 	// Return the child widget matching the provided function, or NULL if no such widget was found. If shouldRetain is true, retain any matched widget before returning it and the caller is responsible for releasing it.
 	virtual Widget *findWidget (Widget::FindMatchFunction fn, void *fnData, bool shouldRetain = false);
 
@@ -308,9 +308,8 @@ protected:
 	// Update the widget as appropriate when compose draw has become enabled or disabled
 	virtual void doProcessComposeDrawChange ();
 
-	// Return a string that should be included as part of the toString method's output
-	virtual StdString toStringDetail ();
-
+	typedef StdString (*DetailStringFunction) (void *itPtr);
+	DetailStringFunction detailStringFn;
 	int destroyClock;
 
 private:

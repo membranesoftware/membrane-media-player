@@ -72,6 +72,7 @@ Widget::Widget ()
 , composeRotation (0.0f)
 , width (0.0f)
 , height (0.0f)
+, detailStringFn (NULL)
 , destroyClock (0)
 , composeTexture (NULL)
 , composeTextureWidth (0)
@@ -269,16 +270,15 @@ StdString Widget::toString () {
 		s.append (widgetName);
 		s.append ("\"");
 	}
-	detail.assign (toStringDetail ());
+	if (detailStringFn) {
+		detail.assign (detailStringFn (this));
+	}
 	if (! detail.empty ()) {
 		s.append (" ");
 		s.append (detail);
 	}
 	s.append (">");
 	return (s);
-}
-StdString Widget::toStringDetail () {
-  return (StdString ());
 }
 
 void Widget::setDestroyDelay (int delayMs) {

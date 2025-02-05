@@ -74,6 +74,7 @@
 #include "MediaItemImageWindow.h"
 #include "MediaItemDetailWindow.h"
 #include "TagActionWindow.h"
+#include "PlayerWindow.h"
 #include "MediaItemUi.h"
 #include "MediaPlaylistUi.h"
 #include "PlayerUi.h"
@@ -130,6 +131,7 @@ PlayerUi::PlayerUi ()
 , isWritePlaylistsComplete (false)
 , isLoadingMedia (false)
 , mediaSearchUpdateTime (0)
+, lastRecordSyncTime (0)
 , searchRecordSyncClock (-1)
 {
 	classId = ClassId::PlayerUi;
@@ -168,8 +170,8 @@ Widget *PlayerUi::createBreadcrumbWidget () {
 OpResult PlayerUi::doLoad () {
 	HashMap *prefs;
 	MediaControlSearch *search;
-	int imagesize, soundmixvolume;
-	bool mediacontrolexpanded, appcardexpanded, shownews, soundmuted;
+	int imagesize, soundmixvolume, visualizertype;
+	bool mediacontrolexpanded, appcardexpanded, shownews, soundmuted, subtitleenabled;
 
 	mediaDisplayCount = 0;
 	mediaAvailableCount = 0;
@@ -182,6 +184,8 @@ OpResult PlayerUi::doLoad () {
 	mediaSortOrder = prefs->find (PlayerUi::sortOrderKey, (int) SystemInterface::Constant_NameSort);
 	soundmixvolume = prefs->find (PlayerUi::soundMixVolumeKey, SoundMixer::maxMixVolume);
 	soundmuted = prefs->find (PlayerUi::soundMutedKey, false);
+	visualizertype = prefs->find (PlayerUi::visualizerTypeKey, PlayerWindow::NoVisualizer);
+	subtitleenabled = prefs->find (PlayerUi::subtitleEnabledKey, true);
 	imagesize = prefs->find (PlayerUi::imageSizeKey, (int) Ui::MediumSize);
 	mediacontrolexpanded = prefs->find (PlayerUi::mediaControlWindowExpandedKey, false);
 	appcardexpanded = prefs->find (PlayerUi::appCardExpandedKey, false);
@@ -193,7 +197,7 @@ OpResult PlayerUi::doLoad () {
 		appcardexpanded = false;
 		shownews = false;
 	}
-	UiStack::instance->setSoundMixOptions (soundmixvolume, soundmuted);
+	UiStack::instance->setPlayerControlOptions (soundmixvolume, soundmuted, visualizertype, subtitleenabled);
 
 	setDetailImageSize (imagesize);
 	cardView->setRowCount (RowCount);
@@ -237,6 +241,9 @@ OpResult PlayerUi::doLoad () {
 	mediaSearchList.push_back (search);
 	SDL_UnlockMutex (mediaSearchMutex);
 
+	retain ();
+	App::instance->addUpdateTask (PlayerUi::awaitMediaControlReady, this);
+
 	return (OpResult::Success);
 }
 
@@ -274,7 +281,7 @@ void PlayerUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 	searchFieldHandle.destroyAndAssign (new TextFieldWindow (App::instance->drawableWidth * searchFieldWidthScale, UiText::instance->getText (UiTextId::EnterSearchKeyPrompt)));
 	searchField->widgetName.assign ("searchText");
 	searchField->setPaddingScale (1.0f, 0.0f);
-	searchField->setButtonsEnabled (TextFieldWindow::PasteButtonOption | TextFieldWindow::ClearButtonOption);
+	searchField->setButtonsEnabled (TextFieldWindow::FsBrowseButtonOption | TextFieldWindow::FsBrowseButtonSortDirectoriesFirstOption | TextFieldWindow::FsBrowseButtonSelectDirectoriesOption | TextFieldWindow::FsBrowseButtonSelectDirectoriesAppendSeparatorOption | TextFieldWindow::ClearButtonOption);
 	searchField->valueEditCallback = Widget::EventCallbackContext (PlayerUi::searchFieldEdited, this);
 	searchPanel->add (searchField);
 
@@ -315,10 +322,10 @@ void PlayerUi::doResume () {
 
 void PlayerUi::doPause () {
 	HashMap *prefs;
-	int soundmixvolume;
-	bool soundmuted;
+	int soundmixvolume, visualizertype;
+	bool soundmuted, subtitleenabled;
 
-	UiStack::instance->getSoundMixOptions (&soundmixvolume, &soundmuted);
+	UiStack::instance->getPlayerControlOptions (&soundmixvolume, &soundmuted, &visualizertype, &subtitleenabled);
 	prefs = App::instance->lockPrefs ();
 	if (mediaControlWindow) {
 		prefs->insert (PlayerUi::mediaControlWindowExpandedKey, mediaControlWindow->isExpanded, false);
@@ -331,6 +338,8 @@ void PlayerUi::doPause () {
 	prefs->insert (PlayerUi::windowModeKey, mediaWindowMode, ImageGridWindowMode);
 	prefs->insert (PlayerUi::soundMixVolumeKey, soundmixvolume, SoundMixer::maxMixVolume);
 	prefs->insert (PlayerUi::soundMutedKey, soundmuted, false);
+	prefs->insert (PlayerUi::visualizerTypeKey, visualizertype, PlayerWindow::NoVisualizer);
+	prefs->insert (PlayerUi::subtitleEnabledKey, subtitleenabled, true);
 	prefs->insert (PlayerUi::showPlaylistsKey, isShowingPlaylists, false);
 	App::instance->unlockPrefs ();
 }
@@ -346,6 +355,25 @@ void PlayerUi::doUpdate (int msElapsed) {
 	audioDisabledAlertWindowHandle.compact ();
 	updatePlaylists ();
 	updateSearch (msElapsed);
+}
+
+void PlayerUi::awaitMediaControlReady (void *itPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (App::instance->isShuttingDown || App::instance->isShutdown) {
+		it->release ();
+		return;
+	}
+	if (! MediaControl::instance->isReady) {
+		App::instance->addUpdateTask (PlayerUi::awaitMediaControlReady, it);
+		return;
+	}
+	if (it->searchField) {
+		it->searchField->setValue (StdString (), true, true);
+		it->searchKey.assign (StdString ());
+		it->resetSearch ();
+	}
+	it->release ();
 }
 
 void PlayerUi::updatePlaylists () {
@@ -580,7 +608,7 @@ void PlayerUi::updateSearch (int msElapsed) {
 		if (search->lastStatusUpdateTime > updatetime) {
 			updatetime = search->lastStatusUpdateTime;
 		}
-		if (advance && (! search->isFindComplete) && (! search->isLoading)) {
+		if (advance && (! search->isFindComplete) && (! search->isLoading) && (lastRecordSyncTime >= search->lastStatusUpdateTime)) {
 			search->advanceSearch ();
 		}
 		if (search->isLoading) {
@@ -775,6 +803,7 @@ void PlayerUi::doSyncRecordStore () {
 	cardView->syncRecordStore ();
 	cardView->reflow ();
 	resetExpandToggles ();
+	lastRecordSyncTime = OsUtil::getTime ();
 }
 
 void PlayerUi::mediaSearchRecordsAdded (void *itPtr, MediaSearch *search) {
@@ -823,6 +852,9 @@ void PlayerUi::searchFieldEdited (void *itPtr, Widget *widgetPtr) {
 void PlayerUi::searchButtonClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
+	if (! MediaControl::instance->isReady) {
+		return;
+	}
 	it->unselectAllMedia ();
 	it->searchKey.assign (it->searchField->getValue ());
 	it->resetSearch ();
@@ -875,11 +907,9 @@ void PlayerUi::playerMenuButtonClicked (void *itPtr, Widget *widgetPtr) {
 void PlayerUi::boxLayoutActionClicked (void *itPtr, Widget *widgetPtr) {
 	((PlayerUi *) itPtr)->setMediaItemWindowMode (ImageGridWindowMode);
 }
-
 void PlayerUi::lineLayoutActionClicked (void *itPtr, Widget *widgetPtr) {
 	((PlayerUi *) itPtr)->setMediaItemWindowMode (DetailLineWindowMode);
 }
-
 void PlayerUi::setMediaItemWindowMode (int mode) {
 	if (mediaWindowMode == mode) {
 		return;
@@ -904,7 +934,6 @@ void PlayerUi::sortByNameActionClicked (void *itPtr, Widget *widgetPtr) {
 	it->mediaSortOrder = SystemInterface::Constant_NameSort;
 	it->resetSearch ();
 }
-
 void PlayerUi::sortByNewestActionClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
@@ -914,7 +943,6 @@ void PlayerUi::sortByNewestActionClicked (void *itPtr, Widget *widgetPtr) {
 	it->mediaSortOrder = SystemInterface::Constant_NewestSort;
 	it->resetSearch ();
 }
-
 void PlayerUi::sortByFilePathActionClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
@@ -1762,6 +1790,7 @@ void PlayerUi::setHelpWindowContent (HelpWindow *helpWindow) {
 		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction3Text), HelpWindow::InfoAction);
 	}
 	helpWindow->addTopicLink (UiText::instance->getText (UiTextId::MediaPlayerInterface).capitalized (), StdString (AppUrl::MediaPlayerInterface));
+	helpWindow->addTopicLink (UiText::instance->getText (UiTextId::MediaPlayerWindow).capitalized (), StdString (AppUrl::MediaPlayerWindow));
 }
 
 static bool findItem_matchMediaName (void *data, Widget *widget) {

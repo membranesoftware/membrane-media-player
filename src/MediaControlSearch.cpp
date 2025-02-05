@@ -70,6 +70,7 @@ void MediaControlSearch::update (int msElapsed) {
 				}
 			}
 			shouldReloadSearch = false;
+			shouldAdvanceSearch = false;
 			stage = FindStart;
 			break;
 		}
@@ -122,6 +123,7 @@ void MediaControlSearch::update (int msElapsed) {
 				eventRecordIds.swap (foundRecordIds);
 				eventCallback (addRecordsCallback);
 				eventRecordIds.clear ();
+				shouldAdvanceSearch = false;
 				stage = Running;
 				break;
 			}

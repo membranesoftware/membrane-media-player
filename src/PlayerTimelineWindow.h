@@ -43,7 +43,7 @@ class LabelWindow;
 
 class PlayerTimelineWindow : public Panel {
 public:
-	PlayerTimelineWindow (double barWidth);
+	PlayerTimelineWindow (double timelineBarWidth);
 	~PlayerTimelineWindow ();
 
 	// Read-write data members
@@ -57,6 +57,9 @@ public:
 	bool isInverseColor;
 	double hoverPosition; // A negative value indicates that the mouse is positioned outside the timeline bar
 	double clickPosition;
+	double hoverSeekPercent; // A negative value indicates that the mouse is positioned outside the timeline bar
+	double clickSeekPercent;
+	bool isLeftSnapEnabled;
 	int64_t playPosition;
 	int64_t playDuration;
 	int64_t highlightedPosition;
@@ -67,6 +70,9 @@ public:
 
 	// Set the bar's width
 	void setBarWidth (double widthValue);
+
+	// Set the enable state for the bar's left snap option. If enabled, the bar provides a larger area on its left side for the zero seek position.
+	void setLeftSnap (bool enable);
 
 	// Set the bar's inverse color option
 	void setInverseColor (bool enable);
@@ -97,6 +103,9 @@ private:
 	// Clear timestampFillPanel and populate it with a set of fill areas
 	void populateTimestampFill ();
 
+	// Assign the playPositionMarker draw position
+	void repositionPlayMarker ();
+
 	Panel *guideSegmentPanel;
 	Panel *timestampFillPanel;
 	WidgetHandle<Panel> highlightPositionMarkerHandle;
@@ -108,6 +117,7 @@ private:
 	LabelWindow *highlightTimeLabel;
 	double barWidth;
 	double barHeight;
+	double barLeftSnapWidth;
 	UiText::TimespanUnit minDurationUnitType;
 };
 #endif

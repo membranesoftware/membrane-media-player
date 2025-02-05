@@ -555,6 +555,17 @@ StdString MediaItem::getSelectWhereSql (const StdString &searchKey) {
 	if (searchKey.empty ()) {
 		return (StdString ());
 	}
+	if (searchKey.contains ("/") || searchKey.contains ("\\")) {
+		key.assign (searchKey);
+		key.replace (StdString ("*"), StdString ("%"));
+		if (! key.endsWith ("%")) {
+			key.append ("%");
+		}
+		sql.assign (" WHERE (mediaPath LIKE ");
+		sql.append (Database::getColumnValueSql (key));
+		sql.append (")");
+		return (sql);
+	}
 	chars.assign (MediaItem::sortKeyCharacters);
 	chars.append ("*");
 	key = searchKey.lowercased ().filtered (chars);

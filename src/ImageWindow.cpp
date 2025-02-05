@@ -113,11 +113,6 @@ ImageWindow *ImageWindow::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::ImageWindow) ? (ImageWindow *) widget : NULL);
 }
 
-StdString ImageWindow::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void ImageWindow::setWindowSize (bool enable, double windowSizeWidth, double windowSizeHeight) {
 	if (! enable) {
 		isWindowSizeEnabled = false;

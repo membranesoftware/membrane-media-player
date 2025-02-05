@@ -523,6 +523,40 @@ StdString StdString::jsonEscaped () const {
 	return (s);
 }
 
+void StdString::markupStrip (const char *tagOpen, const char *tagClose) {
+	StdString s;
+	size_t pos1, pos2, openlen, closelen;
+
+	openlen = StdString (tagOpen).length ();
+	closelen = StdString (tagClose).length ();
+	if ((openlen <= 0) || (closelen <= 0)) {
+		return;
+	}
+	while (true) {
+		pos1 = find (tagOpen);
+		if (pos1 == StdString::npos) {
+			break;
+		}
+		pos2 = find (tagClose, pos1 + openlen);
+		if (pos2 == StdString::npos) {
+			break;
+		}
+		s.assign ("");
+		if (pos1 > 0) {
+			s.append (substr (0, pos1));
+		}
+		s.append (substr (pos2 + closelen));
+		assign (s);
+	}
+}
+StdString StdString::markupStripped (const char *tagOpen, const char *tagClose) const {
+	StdString s;
+
+	s.assign (c_str ());
+	s.markupStrip (tagOpen, tagClose);
+	return (s);
+}
+
 void StdString::idTranslate () {
 	assign (idTranslated ());
 }
@@ -645,7 +679,7 @@ bool StdString::parseHex (int *value) const {
 	}
 	i = 0;
 	s = (char *) c_str ();
-	while (1) {
+	while (true) {
 		c = *s;
 		if (! c) {
 			break;
@@ -689,7 +723,7 @@ bool StdString::parseHex (int64_t *value) const {
 	}
 	i = 0;
 	s = (char *) c_str ();
-	while (1) {
+	while (true) {
 		c = *s;
 		if (! c) {
 			break;

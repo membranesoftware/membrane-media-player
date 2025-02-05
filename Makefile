@@ -130,6 +130,7 @@ O=\
 	Network.o \
 	OsUtil.o \
 	Panel.o \
+	Particle.o \
 	PlayerControl.o \
 	PlayerTimelineWindow.o \
 	PlayerUi.o \
@@ -149,6 +150,7 @@ O=\
 	ScrollViewWindow.o \
 	SdlUtil.o \
 	SettingsWindow.o \
+	Shader.o \
 	SharedBuffer.o \
 	Slider.o \
 	SliderThumbSprite.o \
@@ -163,6 +165,7 @@ O=\
 	StatsWindow.o \
 	StdString.o \
 	StringList.o \
+	SubtitleReader.o \
 	SystemInterface.o \
 	TagActionWindow.o \
 	TaskGroup.o \
@@ -182,6 +185,7 @@ O=\
 	UiStack.o \
 	UiText.o \
 	Video.o \
+	WaveformShader.o \
 	Widget.o
 
 VPATH=$(SRC_PATH)

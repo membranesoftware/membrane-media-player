@@ -46,21 +46,26 @@ constexpr const int guideSegmentCount = 4;
 constexpr const double markerLineAlpha = 0.5f;
 constexpr const double timestampFillAlpha = 0.9f;
 constexpr const double timestampFillHeightScale = 0.38f;
+constexpr const double leftSnapScale = 2.75f;
 
-PlayerTimelineWindow::PlayerTimelineWindow (double barWidth)
+PlayerTimelineWindow::PlayerTimelineWindow (double timelineBarWidth)
 : Panel ()
 , isShortTimestampEnabled (false)
 , recordType (-1)
 , isInverseColor (false)
 , hoverPosition (-1.0f)
 , clickPosition (-1.0f)
+, hoverSeekPercent (-1.0f)
+, clickSeekPercent (-1.0f)
+, isLeftSnapEnabled (false)
 , playPosition (-1)
 , playDuration (0)
 , highlightedPosition (-1)
 , highlightPositionMarkerHandle (&highlightPositionMarker)
 , playPositionMarkerHandle (&playPositionMarker)
-, barWidth (barWidth)
+, barWidth (-1.0f)
 , barHeight (0.0f)
+, barLeftSnapWidth (-1.0f)
 , minDurationUnitType (UiText::MillisecondsUnit)
 {
 	classId = ClassId::PlayerTimelineWindow;
@@ -93,8 +98,7 @@ PlayerTimelineWindow::PlayerTimelineWindow (double barWidth)
 	timestampFillPanel->isInputSuspended = true;
 
 	barHeight = startTimeLabel->height * 2.0f;
-	populateGuideSegments ();
-	reflow ();
+	setBarWidth (timelineBarWidth);
 }
 PlayerTimelineWindow::~PlayerTimelineWindow () {
 }
@@ -132,12 +136,24 @@ void PlayerTimelineWindow::readRecord (const StdString &recordIdValue) {
 }
 
 void PlayerTimelineWindow::setBarWidth (double widthValue) {
+	if (widthValue < 1.0f) {
+		widthValue = 1.0f;
+	}
 	if (FLOAT_EQUALS (barWidth, widthValue)) {
 		return;
 	}
 	barWidth = widthValue;
 	populateGuideSegments ();
 	populateTimestampFill ();
+	reflow ();
+	repositionPlayMarker ();
+}
+
+void PlayerTimelineWindow::setLeftSnap (bool enable) {
+	if (isLeftSnapEnabled == enable) {
+		return;
+	}
+	isLeftSnapEnabled = enable;
 	reflow ();
 }
 
@@ -208,7 +224,20 @@ void PlayerTimelineWindow::setHighlightedPosition (int64_t timePosition) {
 	}
 	else {
 		highlightedPosition = timePosition;
-		x = ((double) timePosition) * barWidth / (double) playDuration;
+		if (barLeftSnapWidth >= 1.0f) {
+			if (highlightedPosition <= 0) {
+				x = 0.0f;
+			}
+			else {
+				x = barLeftSnapWidth + (((double) highlightedPosition) * (barWidth - barLeftSnapWidth) / (double) playDuration);
+			}
+		}
+		else {
+			x = ((double) highlightedPosition) * barWidth / (double) playDuration;
+		}
+		if (x < 0.0f) {
+			x = 0.0f;
+		}
 		if (x > barWidth) {
 			x = barWidth;
 		}
@@ -236,7 +265,6 @@ void PlayerTimelineWindow::setHighlightedPosition (int64_t timePosition) {
 
 void PlayerTimelineWindow::setPlayPosition (int64_t timePosition) {
 	std::vector<double>::const_iterator i1, i2;
-	double x;
 
 	if ((playPosition < 0) && (timePosition < 0)) {
 		return;
@@ -250,10 +278,6 @@ void PlayerTimelineWindow::setPlayPosition (int64_t timePosition) {
 		startTimeLabel->setText (UiText::instance->getTimespanText (0.0f, minDurationUnitType, isShortTimestampEnabled));
 	}
 	else {
-		x = ((double) timePosition) * barWidth / (double) playDuration;
-		if (x > barWidth) {
-			x = barWidth;
-		}
 		if (! playPositionMarker) {
 			playPositionMarkerHandle.destroyAndAssign (new Panel ());
 			add (playPositionMarker, 3);
@@ -261,7 +285,7 @@ void PlayerTimelineWindow::setPlayPosition (int64_t timePosition) {
 			playPositionMarker->setFixedSize (true, (UiConfiguration::instance->timelineMarkerWidth / 2.0f), barHeight - 2.0f);
 			playPositionMarker->isInputSuspended = true;
 		}
-		playPositionMarker->position.assign (x - (playPositionMarker->width / 2.0f), 1.0f);
+		repositionPlayMarker ();
 		startTimeLabel->setText (UiText::instance->getTimespanText (playPosition, minDurationUnitType, isShortTimestampEnabled));
 	}
 }
@@ -325,6 +349,15 @@ void PlayerTimelineWindow::populateTimestampFill () {
 }
 
 void PlayerTimelineWindow::reflow () {
+	if (isLeftSnapEnabled) {
+		barLeftSnapWidth = floor (UiConfiguration::instance->paddingSize * leftSnapScale);
+		if (barWidth < (barLeftSnapWidth * 2.0f)) {
+			barLeftSnapWidth = -1.0f;
+		}
+	}
+	else {
+		barLeftSnapWidth = -1.0f;
+	}
 	setFixedSize (true, barWidth, barHeight);
 	guideSegmentPanel->position.assign (0.0f, 0.0f);
 	timestampFillPanel->position.assign (0.0f, (barHeight / 2.0f) - (timestampFillPanel->height / 2.0f));
@@ -332,21 +365,56 @@ void PlayerTimelineWindow::reflow () {
 	endTimeLabel->position.assign (barWidth - endTimeLabel->width, barHeight - endTimeLabel->height);
 }
 
+void PlayerTimelineWindow::repositionPlayMarker () {
+	double x;
+
+	if (! playPositionMarker) {
+		return;
+	}
+	x = 0.0f;
+	if ((playDuration > 0) && (playPosition > 0)) {
+		x = ((double) playPosition) * barWidth / (double) playDuration;
+		if (x > barWidth) {
+			x = barWidth;
+		}
+	}
+	playPositionMarker->position.assign (x - (playPositionMarker->width / 2.0f), 1.0f);
+}
+
 bool PlayerTimelineWindow::doProcessMouseState (const Widget::MouseState &mouseState) {
+	double pos;
+
 	Panel::doProcessMouseState (mouseState);
 	if (mouseState.isEntered) {
 		if (! FLOAT_EQUALS (hoverPosition, mouseState.enterDeltaX)) {
 			hoverPosition = mouseState.enterDeltaX;
+
+			pos = mouseState.enterDeltaX;
+			if (barLeftSnapWidth >= 1.0f) {
+				if (pos <= barLeftSnapWidth) {
+					pos = 0.0f;
+				}
+				else {
+					pos = (pos - barLeftSnapWidth) / (barWidth - barLeftSnapWidth);
+				}
+			}
+			else {
+				pos /= barWidth;
+			}
+			hoverSeekPercent = pos * 100.0f;
+
 			eventCallback (positionHoverCallback);
 		}
 		if (mouseState.isLeftClicked) {
-			clickPosition = mouseState.enterDeltaX;
+			clickPosition = hoverPosition;
+			clickSeekPercent = hoverSeekPercent;
 			eventCallback (positionClickCallback);
 		}
 	}
 	else {
 		if (hoverPosition >= 0.0f) {
 			hoverPosition = -1.0f;
+			hoverSeekPercent = -1.0f;
 			eventCallback (positionHoverCallback);
 		}
 	}

@@ -89,6 +89,10 @@ void LabelWindow::translateTextColor (const Color &startColor, const Color &targ
 	label->textColor.translate (startColor, targetColor, durationMs);
 }
 
+void LabelWindow::setShadowed (bool enable, const Color &shadowColor, int shadowDx, int shadowDy) {
+	label->setShadowed (enable, shadowColor, shadowDx, shadowDy);
+}
+
 StdString LabelWindow::getText () const {
 	return (label->text);
 }

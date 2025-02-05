@@ -55,6 +55,7 @@ public:
 	bool isStopped;
 	int runCount;
 	int threadCount;
+	int nextThreadIndex;
 
 	typedef void (*RunFunction) (void *runPtr);
 	struct RunContext {

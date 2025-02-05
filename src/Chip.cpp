@@ -55,11 +55,6 @@ Chip::Chip (const StdString &chipText, Sprite *iconSprite, bool shouldDestroySpr
 Chip::~Chip () {
 }
 
-StdString Chip::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void Chip::setText (const StdString &text) {
 	if (text.empty ()) {
 		if (textLabel) {

@@ -87,6 +87,7 @@ protected:
 	void doPause ();
 	static void doPause_processItems (void *markerPtr, Widget *itemWidget);
 	void doUpdate (int msElapsed);
+	void doClearPopupWidgets ();
 	void doResize ();
 	void handleDetailImageSizeChange ();
 	static void handleDetailImageSizeChange_processItems (void *itPtr, Widget *itemWidget);

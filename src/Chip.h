@@ -54,10 +54,6 @@ public:
 	// Superclass override methods
 	void reflow ();
 
-protected:
-	// Superclass override methods
-	StdString toStringDetail ();
-
 private:
 	Label *textLabel;
 	Image *iconImage;

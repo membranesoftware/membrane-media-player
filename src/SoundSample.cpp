@@ -47,7 +47,7 @@ extern "C" {
 #include "UiText.h"
 #include "UiTextId.h"
 #include "TaskGroup.h"
-#include "Buffer.h"
+#include "SharedBuffer.h"
 #include "SoundSample.h"
 
 SoundSample::SoundSample (const char *soundId, int outputSampleRate, SDL_AudioFormat outputSdlAudioFormat, int outputChannelCount)
@@ -152,7 +152,7 @@ void SoundSample::clearFrames () {
 	i2 = frames.end ();
 	while (i1 != i2) {
 		if (i1->sampleData) {
-			delete (i1->sampleData);
+			i1->sampleData->release ();
 			i1->sampleData = NULL;
 		}
 		++i1;
@@ -497,17 +497,21 @@ void SoundSample::processFrame (int sampleCount, int64_t pts, int64_t duration) 
 	lastFrameDuration = duration;
 	frame.pts = pts;
 	frame.duration = duration;
-	frame.sampleData = new Buffer ();
+	frame.sampleData = new SharedBuffer ();
+	frame.sampleData->retain ();
 	result = frame.sampleData->add (swrBuffer, outputsize);
 	if (result != OpResult::Success) {
-		delete (frame.sampleData);
+		frame.sampleData->release ();
 		failLoad (UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), "Failed to allocate memory for sample data");
 	}
 	else {
 		frame.id = nextFrameId;
 		++nextFrameId;
-		if (isLive && frameCallback) {
-			frameCallback (frameCallbackData, this, frame);
+		if (isLive) {
+			if (frameCallback) {
+				frameCallback (frameCallbackData, this, frame);
+			}
+			frame.sampleData->release ();
 		}
 		else {
 			SDL_LockMutex (framesMutex);

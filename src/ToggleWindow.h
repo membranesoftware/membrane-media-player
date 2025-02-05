@@ -85,10 +85,6 @@ public:
 	// Superclass override methods
 	void reflow ();
 
-protected:
-	// Superclass override methods
-	StdString toStringDetail ();
-
 private:
 	// Callback functions
 	static void mouseEntered (void *itPtr, Widget *widgetPtr);

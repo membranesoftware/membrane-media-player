@@ -472,7 +472,6 @@ size_t Resource::rwopsRead (SDL_RWops *rw, void *ptr, size_t size, size_t maxnum
 
 size_t Resource::rwopsWrite (SDL_RWops *rw, const void *ptr, size_t size, size_t num) {
 	// Write operations are not supported by this interface
-
 	return (0);
 }
 

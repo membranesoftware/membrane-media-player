@@ -85,7 +85,6 @@ protected:
 	void doUpdate (int msElapsed);
 	void doDraw (double originX, double originY);
 	void doResize ();
-	StdString toStringDetail ();
 
 	// Reset the widget's width and height values
 	void resetSize ();

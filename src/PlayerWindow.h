@@ -37,16 +37,19 @@
 #include "SoundMixer.h"
 #include "MediaItem.h"
 #include "Position.h"
+#include "UiConfiguration.h"
 #include "Widget.h"
 #include "WidgetHandle.h"
 #include "Panel.h"
 
 class Button;
 class Video;
+class WaveformShader;
 class LabelWindow;
 class ImageWindow;
 class Toggle;
 class Slider;
+class TextFlow;
 class ProgressRing;
 class IconLabelWindow;
 class PlayerTimelineWindow;
@@ -62,6 +65,7 @@ public:
 	// Read-write data members
 	Widget::EventCallbackContext detachCallback;
 	Widget::EventCallbackContext maximizeCallback;
+	Widget::EventCallbackContext settingsChangeCallback;
 	bool isDetached;
 	StdString playlistId;
 
@@ -77,6 +81,8 @@ public:
 	int64_t playSeekTimestamp;
 	int soundMixVolume;
 	bool isSoundMuted;
+	int visualizerType;
+	bool isSubtitleEnabled;
 
 	// Set the window size
 	void setWindowSize (double widthValue, double heightValue);
@@ -109,12 +115,22 @@ public:
 	// Return true if playback is in progress and paused
 	bool isPaused ();
 
+	static constexpr const int NoVisualizer = 0;
+	static constexpr const int MediumWaveformVisualizer = 1;
+	static constexpr const int LargeWaveformVisualizer = 2;
+	static constexpr const int SmallWaveformVisualizer = 3;
+	static constexpr const int VisualizerTypeCount = 4;
+	// Set the display state of the player's visualizer animation
+	void setVisualizerType (int typeValue);
+
+	// Set the enable state of the player's subtitle option
+	void setSubtitleEnabled (bool enable);
+
 	// Superclass override methods
 	void reflow ();
 
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	void doUpdate (int msElapsed);
 	bool doProcessMouseState (const Widget::MouseState &mouseState);
 
@@ -127,10 +143,12 @@ private:
 	static void pauseButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void forwardButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void rewindButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void visualizerButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void detachButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void maximizeButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void soundToggleStateChanged (void *itPtr, Widget *widgetPtr);
 	static void soundVolumeSliderValueChanged (void *itPtr, Widget *widgetPtr);
+	static void subtitleToggleStateChanged (void *itPtr, Widget *widgetPtr);
 
 	// Set widgetName values for control widgets
 	void setWidgetNames ();
@@ -141,6 +159,9 @@ private:
 
 	// Set control visible state
 	void setControlVisible (bool visible);
+
+	// Set w and h to width and height values that should be used as the waveform size for visualizerType
+	void getWaveformSize (double *w, double *h);
 
 	bool isControlVisible;
 	int controlHideClock;
@@ -167,6 +188,15 @@ private:
 	int timelineHoverClock;
 	WidgetHandle<ImageWindow> timelinePopupHandle;
 	ImageWindow *timelinePopup;
+	Button *visualizerButton;
+	WidgetHandle<WaveformShader> waveformHandle;
+	WaveformShader *waveform;
+	WidgetHandle<TextFlow> subtitleTextHandle;
+	TextFlow *subtitleText;
+	UiConfiguration::FontType subtitleFont;
+	double subtitleBottomMargin;
+	StdString subtitleTextContent;
+	Toggle *subtitleToggle;
 	WidgetHandle<ProgressRing> progressRingHandle;
 	ProgressRing *progressRing;
 	int progressRingShowClock;

@@ -43,7 +43,7 @@ public:
 	MediaSearch ();
 	virtual ~MediaSearch ();
 
-	static constexpr const int defaultPageSize = 64;
+	static constexpr const int defaultPageSize = 48;
 
 	typedef void (*EventCallback) (void *data, MediaSearch *search);
 	struct EventCallbackContext {

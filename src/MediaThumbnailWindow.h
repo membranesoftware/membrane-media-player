@@ -98,7 +98,6 @@ public:
 
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	void doProcessComposeDrawChange ();
 
 private:

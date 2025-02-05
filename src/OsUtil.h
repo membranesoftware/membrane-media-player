@@ -81,6 +81,15 @@ public:
 	// Return a string containing the extension value of path, or an empty string for a path with no extension
 	static StdString getPathExtension (const StdString &path);
 
+	// Return a string containing path with extension appended
+	static StdString getAppendExtensionPath (const StdString &path, const StdString &extension);
+
+	// Return a string containing path with extension appended after removing any other extension present
+	static StdString getReplaceExtensionPath (const StdString &path, const StdString &extension);
+
+	// Return a string containing path after appending a trailing path separator if one is not already present
+	static StdString getTrailingSeparatorPath (const StdString &path);
+
 	// Parse path into path elements and set destList contents to the resulting strings
 	static void splitPath (const StdString &path, StringList *destList);
 
@@ -111,8 +120,12 @@ public:
 	// Return a boolean value indicating if the provided path names a file that exists
 	static bool fileExists (const StdString &path);
 
-	// Read a file from the specified path and return a newly created Buffer object holding the resulting data, or NULL if the file read failed. If a Buffer is returned by this method, the caller must delete it when no longer needed.
+	// Read the file at the specified path and return a newly created Buffer object holding the resulting data, or NULL if the file read failed. If a Buffer is returned by this method, the caller must delete it when no longer needed.
 	static Buffer *readFile (const StdString &path);
+
+	typedef OpResult (*ReadFileLinesCallback) (void *data, const StdString &line);
+	// Read the file at the specified path, invoke the provided callback with text preceding each newline, and return a result value
+	static OpResult readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength = 65536);
 
 	// Write file data to the specified path and return a Result value. If freeWriteData is true, free the writeData buffer.
 	static OpResult writeFile (const StdString &path, Buffer *writeData, bool freeWriteData = true);

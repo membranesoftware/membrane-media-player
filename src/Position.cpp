@@ -186,7 +186,6 @@ void Position::assignBounded (double positionX, double positionY, double minX, d
 bool Position::equals (double positionX, double positionY) const {
 	return (FLOAT_EQUALS (x, positionX) && FLOAT_EQUALS (y, positionY));
 }
-
 bool Position::equals (const Position &otherPosition) const {
 	return (FLOAT_EQUALS (x, otherPosition.x) && FLOAT_EQUALS (y, otherPosition.y));
 }
@@ -231,16 +230,13 @@ void Position::translate (double targetX, double targetY, int durationMs) {
 	translateDx = dx / (double) durationMs;
 	translateDy = dy / (double) durationMs;
 }
-
 void Position::translate (const Position &targetPosition, int durationMs) {
 	translate (targetPosition.x, targetPosition.y, durationMs);
 }
-
 void Position::translate (double startX, double startY, double targetX, double targetY, int durationMs) {
 	assign (startX, startY);
 	translate (targetX, targetY, durationMs);
 }
-
 void Position::translate (const Position &startPosition, const Position &targetPosition, int durationMs) {
 	assign (startPosition);
 	translate (targetPosition.x, targetPosition.y, durationMs);
@@ -249,7 +245,6 @@ void Position::translate (const Position &startPosition, const Position &targetP
 void Position::translateX (double targetX, int durationMs) {
 	translate (targetX, y, durationMs);
 }
-
 void Position::translateX (double startX, double targetX, int durationMs) {
 	assignX (startX);
 	translate (targetX, y, durationMs);
@@ -258,7 +253,6 @@ void Position::translateX (double startX, double targetX, int durationMs) {
 void Position::translateY (double targetY, int durationMs) {
 	translate (x, targetY, durationMs);
 }
-
 void Position::translateY (double startY, double targetY, int durationMs) {
 	assignY (startY);
 	translate (x, targetY, durationMs);
@@ -296,7 +290,6 @@ double Position::distance (double positionX, double positionY) const {
 	dy = y - positionY;
 	return (sqrt ((dx * dx) + (dy * dy)));
 }
-
 double Position::distance (const Position &otherPosition) const {
 	return (distance (otherPosition.x, otherPosition.y));
 }

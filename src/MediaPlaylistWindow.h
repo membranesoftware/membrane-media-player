@@ -141,7 +141,6 @@ public:
 
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	void doUpdate (int msElapsed);
 	void doResize ();
 

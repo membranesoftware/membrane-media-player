@@ -30,86 +30,95 @@
 * QUESTIONS OR ADDITIONAL INFORMATION
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
-// Widget that shows a text label
-#ifndef LABEL_H
-#define LABEL_H
+// Shader that renders a waveform animation from audio sample data
+#ifndef WAVEFORM_SHADER_H
+#define WAVEFORM_SHADER_H
 
-#include "UiConfiguration.h"
-#include "IntList.h"
-#include "Font.h"
-#include "Color.h"
-#include "Widget.h"
+#include "Particle.h"
+#include "SoundMixer.h"
+#include "WidgetHandle.h"
+#include "Shader.h"
 
-class PanelLayoutFlow;
+class Video;
+class SharedBuffer;
 
-class Label : public Widget {
+class WaveformShader : public Shader {
 public:
-	Label (const StdString &text, UiConfiguration::FontType fontType = UiConfiguration::BodyFont, const Color &color = Color (0.0f, 0.0f, 0.0f));
-	~Label ();
+	WaveformShader (double shaderWidth, double shaderHeight, double particleDensity = 0.25f);
+	~WaveformShader ();
 
 	// Return a typecasted pointer to the provided widget, or NULL if the widget does not appear to be of the correct type
-	static Label *castWidget (Widget *widget);
-
-	static constexpr const char obscureCharacter = '*';
-
-	// Read-write data members
-	Color textColor;
-	Color textShadowColor;
+	static WaveformShader *castWidget (Widget *widget);
 
 	// Read-only data members
-	StdString text;
-	UiConfiguration::FontType textFontType;
-	Font *textFont;
-	StdString textFontName;
-	int textFontSize;
-	double spaceWidth;
-	double maxGlyphWidth;
-	double maxLineHeight;
-	double maxCharacterHeight;
-	double descenderHeight;
-	bool isUnderlined;
-	bool isShadowed;
-	int textShadowDx;
-	int textShadowDy;
-	bool isObscured;
+	double shaderWidth;
+	double shaderHeight;
+	double particleDensity;
+	int frameDuration;
+	int64_t soundPlayerId;
+	SDL_AudioFormat audioSampleFormat;
+	int audioSampleRate;
+	int audioSampleChannelCount;
+	int audioSampleSize;
+	Video *sourceVideo;
 
-	// Set the label's text, changing its active font if a type is provided
-	void setText (const StdString &textContent, UiConfiguration::FontType fontType = UiConfiguration::NoFont, bool forceFontReload = false);
+	// Execute a play operation for the specified sample, store the created player ID, and return true if successful
+	bool playResourceSample (const char *soundId, int mixVolume = SoundMixer::maxMixVolume, bool muted = false);
 
-	// Set the label's font
-	void setFont (UiConfiguration::FontType fontType);
+	// Set a Video widget that should provide audio data for waveform render, or clear any existing source video if NULL
+	void setSourceVideo (Video *video);
 
-	// Set the label's underline state
-	void setUnderlined (bool enable);
-
-	// Set the label's shadowed state. If enabled, the label renders a shadow effect under each glyph.
-	void setShadowed (bool enable, const Color &shadowColor = Color (0.0f, 0.0f, 0.0f), int shadowDx = -1, int shadowDy = 1);
-
-	// Set the label's obscured state. If enabled, the label renders using spacer characters to conceal its value.
-	void setObscured (bool enable);
-
-	// Return the provided y position value, adjusted as appropriate for the label's line height
-	double getLinePosition (double targetY);
-
-	// Return the width of the label's text up to the specified character position
-	double getCharacterPosition (int position);
-
-	// Superclass override methods
-	void flowRight (PanelLayoutFlow *flow);
-	void flowDown (PanelLayoutFlow *flow);
-	void centerVertical (PanelLayoutFlow *flow);
+	// Set the size of the shader texture
+	void setShaderSize (double targetWidth, double targetHeight);
 
 protected:
-	// Superclass override methods
-	void doUpdate (int msElapsed);
-	void doResize ();
-	void doDraw (double originX, double originY);
+	// Update render state as appropriate for an elapsed millisecond time period and return true if render surface updates are needed
+	bool updateRenderState (int msElapsed);
+
+	// Update the content of renderTexture as appropriate for render state
+	void updateRenderTexture ();
 
 private:
-	std::list<Font::Glyph *> glyphList;
-	int maxGlyphTopBearing;
-	double underlineMargin;
-	IntList kerningList;
-	SDL_mutex *textMutex;
+	// Remove all items from sourceSamples
+	void clearSourceSamples ();
+
+	// Reset readSampleFn for use with audioSampleFormat
+	void assignReadSampleFn ();
+
+	// Reposition particles as appropriate for data in frameSamples
+	void assignParticlePositions ();
+
+	// Reposition particles as appropriate for a period of time without sample data and return true if any positions were changed
+	bool decayParticlePositions ();
+
+	// Return a sample value from sampleBuffer, scaled to a range from -1.0 to 1.0.
+	typedef double (*ReadSampleFunction) (uint8_t *sampleBuffer, int channelCount);
+	static double readSint8Sample (uint8_t *sampleBuffer, int channelCount);
+	static double readUint8Sample (uint8_t *sampleBuffer, int channelCount);
+	static double readSint16Sample (uint8_t *sampleBuffer, int channelCount);
+	static double readUint16Sample (uint8_t *sampleBuffer, int channelCount);
+	static double readSint32Sample (uint8_t *sampleBuffer, int channelCount);
+	static double readFloat32Sample (uint8_t *sampleBuffer, int channelCount);
+
+	// Callback functions
+	static void soundMixerOutput (void *itPtr, SharedBuffer *sampleData, int playerWriteDelta);
+
+	std::vector<Particle> particles;
+	SDL_mutex *particleMutex;
+	std::list<SharedBuffer *> sourceSamples;
+	SDL_mutex *sourceSampleMutex;
+	int sourceSampleSize;
+	WaveformShader::ReadSampleFunction readSampleFn;
+	bool isDecayActive;
+	int decayClock;
+	WidgetHandle<Video> sourceVideoHandle;
+	bool shouldStopSoundPlayer;
+	int bufferPosition;
+	int frameSampleCount;
+	int frameRenderClock;
+	int soundPlayerWriteDelta;
+	std::list<SharedBuffer *> frameSamples;
+	int64_t sampleConsumeCount;
+	int64_t sampleReceiveCount;
 };
 #endif

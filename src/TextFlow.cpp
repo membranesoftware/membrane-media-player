@@ -31,7 +31,6 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "Ui.h"
 #include "Resource.h"
 #include "Widget.h"
 #include "Label.h"
@@ -47,6 +46,10 @@ TextFlow::TextFlow (double viewWidth, UiConfiguration::FontType fontType)
 , textFontType (UiConfiguration::NoFont)
 , textFont (NULL)
 , textFontSize (0)
+, isTextShadowed (false)
+, textShadowDx (0)
+, textShadowDy (0)
+, isCenterAligned (false)
 {
 	setTextColor (UiConfiguration::instance->primaryTextColor);
 	setText (StdString (), fontType);
@@ -75,19 +78,45 @@ void TextFlow::setFont (UiConfiguration::FontType fontType) {
 }
 
 void TextFlow::setTextColor (const Color &color) {
-	std::list<LabelWindow *>::iterator i1, i2;
+	std::list<LabelWindow *>::const_iterator i1, i2;
 
 	textColor.assign (color);
-	i1 = lineList.begin ();
-	i2 = lineList.end ();
+	i1 = lineList.cbegin ();
+	i2 = lineList.cend ();
 	while (i1 != i2) {
 		(*i1)->setTextColor (textColor);
 		++i1;
 	}
 }
 
+void TextFlow::setTextShadowed (bool enable, const Color &shadowColor, int shadowDx, int shadowDy) {
+	std::list<LabelWindow *>::const_iterator i1, i2;
+
+	textShadowColor.assign (shadowColor);
+	textShadowDx = shadowDx;
+	textShadowDy = shadowDy;
+	if (isTextShadowed == enable) {
+		return;
+	}
+	isTextShadowed = enable;
+	i1 = lineList.cbegin ();
+	i2 = lineList.cend ();
+	while (i1 != i2) {
+		(*i1)->setShadowed (isTextShadowed, textShadowColor, textShadowDx, textShadowDy);
+		++i1;
+	}
+}
+
+void TextFlow::setCenterAligned (bool enable) {
+	if (isCenterAligned == enable) {
+		return;
+	}
+	isCenterAligned = enable;
+	reflow ();
+}
+
 void TextFlow::setText (const StdString &textContent, UiConfiguration::FontType fontType, bool forceFontReload) {
-	std::list<LabelWindow *>::iterator i1, i2;
+	std::list<LabelWindow *>::const_iterator i1, i2;
 	Font *loadfont;
 
 	loadfont = NULL;
@@ -112,8 +141,8 @@ void TextFlow::setText (const StdString &textContent, UiConfiguration::FontType 
 		return;
 	}
 
-	i1 = lineList.begin ();
-	i2 = lineList.end ();
+	i1 = lineList.cbegin ();
+	i2 = lineList.cend ();
 	while (i1 != i2) {
 		(*i1)->isDestroyed = true;
 		++i1;
@@ -173,6 +202,9 @@ void TextFlow::addLines (const StdString &linesText) {
 			label->setFixedPadding (true, 0.0f, 0.0f);
 			label->setWindowWidth (metrics.textWidth);
 			label->setLinePosition (true);
+			if (isTextShadowed) {
+				label->setShadowed (true, textShadowColor, textShadowDx, textShadowDy);
+			}
 			lineList.push_back (label);
 
 			textFont->resetMetrics (&metrics, metrics.text.substr (breakpos), 0);
@@ -185,13 +217,16 @@ void TextFlow::addLines (const StdString &linesText) {
 		label->setFixedPadding (true, 0.0f, 0.0f);
 		label->setWindowWidth (metrics.textWidth);
 		label->setLinePosition (true);
+		if (isTextShadowed) {
+			label->setShadowed (true, textShadowColor, textShadowDx, textShadowDy);
+		}
 		lineList.push_back (label);
 	}
 	reflow ();
 }
 
 void TextFlow::reflow () {
-	std::list<LabelWindow *>::iterator i1, i2;
+	std::list<LabelWindow *>::const_iterator i1, i2;
 	LabelWindow *label;
 	double x, y, h;
 
@@ -199,10 +234,13 @@ void TextFlow::reflow () {
 	x = widthPadding;
 	y = heightPadding;
 	h = 0.0f;
-	i1 = lineList.begin ();
-	i2 = lineList.end ();
+	i1 = lineList.cbegin ();
+	i2 = lineList.cend ();
 	while (i1 != i2) {
 		label = *i1;
+		if (isCenterAligned) {
+			x = (viewWidth / 2.0f) - (label->width / 2.0f);
+		}
 		label->position.assign (x, y);
 		y += label->getMaxLineHeight () + UiConfiguration::instance->textLineHeightMargin;
 		h = label->position.y + label->height;

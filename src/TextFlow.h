@@ -58,6 +58,11 @@ public:
 	StdString textFontName;
 	int textFontSize;
 	Color textColor;
+	bool isTextShadowed;
+	Color textShadowColor;
+	int textShadowDx;
+	int textShadowDy;
+	bool isCenterAligned;
 
 	// Set the text flow's width
 	void setViewWidth (double targetWidth);
@@ -67,6 +72,12 @@ public:
 
 	// Set the text flow's text color
 	void setTextColor (const Color &color);
+
+	// Set the enable state of the text flow's shadowed text option. If enabled, text labels render a shadow effect under each glyph.
+	void setTextShadowed (bool enable, const Color &shadowColor = Color (0.0f, 0.0f, 0.0f), int shadowDx = -1, int shadowDy = 1);
+
+	// Set the enable state of the text flow's center text alignment option
+	void setCenterAligned (bool enable);
 
 	// Set the text flow's content, changing its active font if fontType is provided
 	void setText (const StdString &textContent, UiConfiguration::FontType fontType = UiConfiguration::NoFont, bool forceFontReload = false);

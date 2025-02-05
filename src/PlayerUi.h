@@ -73,6 +73,8 @@ public:
 	static constexpr const char *mediaControlWindowExpandedKey = "PlayerUiH";
 	static constexpr const char *startUpdateKey = "PlayerUiI";
 	static constexpr const char *showAppNewsKey = "PlayerUiJ";
+	static constexpr const char *visualizerTypeKey = "PlayerUiK";
+	static constexpr const char *subtitleEnabledKey = "PlayerUiL";
 
 	// Superclass override methods
 	void setHelpWindowContent (HelpWindow *helpWindow);
@@ -158,6 +160,7 @@ private:
 			ui (NULL) { }
 	};
 	// Task functions
+	static void awaitMediaControlReady (void *itPtr);
 	static void addTags (void *taskPtr);
 	void executeAddTags (PlayerUi::TagTask *task);
 	static void removeTags (void *taskPtr);
@@ -262,6 +265,7 @@ private:
 	SDL_mutex *mediaSearchMutex;
 	std::list<MediaSearch *> mediaSearchList;
 	int64_t mediaSearchUpdateTime;
+	int64_t lastRecordSyncTime;
 	int searchRecordSyncClock;
 	HashMap selectedMediaMap;
 };

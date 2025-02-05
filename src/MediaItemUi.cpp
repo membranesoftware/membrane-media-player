@@ -119,6 +119,7 @@ void MediaItemUi::setHelpWindowContent (HelpWindow *helpWindow) {
 }
 
 OpResult MediaItemUi::doLoad () {
+	StdString text;
 	HashMap *prefs;
 	int imagesize;
 
@@ -132,7 +133,14 @@ OpResult MediaItemUi::doLoad () {
 	cardView->setRowSelectionAnimated (FrameThumbnailRow, true);
 	cardView->setRowRepositionAnimated (FrameThumbnailRow, true);
 	cardView->setRowLabeled (FrameThumbnailRow, true, MediaItemUi::thumbnailCardViewItemLabel, this);
-	cardView->setRowHeader (FrameThumbnailRow, createRowHeaderPanel (UiText::instance->getText (UiTextId::Frames).capitalized ()));
+
+	if ((! mediaItem.isVideo) && mediaItem.isAudio && mediaItem.hasAudioAlbumArt) {
+		text = UiText::instance->getText (UiTextId::AlbumArt).capitalized ();
+	}
+	else {
+		text = UiText::instance->getText (UiTextId::Frames).capitalized ();
+	}
+	cardView->setRowHeader (FrameThumbnailRow, createRowHeaderPanel (text));
 
 	cardView->setRowSelectionAnimated (MarkerRow, true);
 	cardView->setRowRepositionAnimated (MarkerRow, true);
@@ -195,7 +203,7 @@ void MediaItemUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 }
 
 void MediaItemUi::doResume () {
-	StdString cardid, text, rationame, framesizename;
+	StdString cardid, text, rationame, framesizename, attributedesc;
 	Int64List::const_iterator i1, i2;
 	MediaThumbnailWindow *thumbnail;
 	TextCardWindow *textcard;
@@ -242,33 +250,45 @@ void MediaItemUi::doResume () {
 	textcard->setMouseHoverTooltip (UiText::instance->getText (UiTextId::MediaName).capitalized ());
 	cardView->addItem (textcard, InfoRow);
 
-	if ((mediaItem.width > 0) && (mediaItem.height > 0)) {
-		text.sprintf ("%ix%i", mediaItem.width, mediaItem.height);
-		rationame = MediaUtil::getAspectRatioDisplayString (mediaItem.width, mediaItem.height);
-		framesizename = MediaUtil::getFrameSizeName (mediaItem.width, mediaItem.height);
-		if ((! rationame.empty ()) || (! framesizename.empty ())) {
-			text.append (" (");
-			if (! rationame.empty ()) {
-				text.append (rationame);
-			}
-			if (! framesizename.empty ()) {
+	if (mediaItem.isVideo) {
+		if ((mediaItem.width > 0) && (mediaItem.height > 0)) {
+			text.sprintf ("%ix%i", mediaItem.width, mediaItem.height);
+			rationame = MediaUtil::getAspectRatioDisplayString (mediaItem.width, mediaItem.height);
+			framesizename = MediaUtil::getFrameSizeName (mediaItem.width, mediaItem.height);
+			if ((! rationame.empty ()) || (! framesizename.empty ())) {
+				text.append (" (");
 				if (! rationame.empty ()) {
-					text.append (", ");
+					text.append (rationame);
 				}
-				text.append (framesizename);
+				if (! framesizename.empty ()) {
+					if (! rationame.empty ()) {
+						text.append (", ");
+					}
+					text.append (framesizename);
+				}
+				text.append (")");
 			}
-			text.append (")");
+			attributes.push_back (text);
 		}
-		attributes.push_back (text);
+		if (mediaItem.frameRate > 0.0f) {
+			attributes.push_back (StdString::createSprintf ("%.2ffps", mediaItem.frameRate));
+		}
+		if (mediaItem.videoBitrate > 0) {
+			attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.videoBitrate));
+		}
+		else if (mediaItem.totalBitrate > 0) {
+			attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.totalBitrate));
+		}
+		attributedesc.assign (UiText::instance->getText (UiTextId::VideoAttributes).capitalized ());
 	}
-	if (mediaItem.frameRate > 0.0f) {
-		attributes.push_back (StdString::createSprintf ("%.2ffps", mediaItem.frameRate));
-	}
-	if (mediaItem.videoBitrate > 0) {
-		attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.videoBitrate));
-	}
-	else if (mediaItem.totalBitrate > 0) {
-		attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.totalBitrate));
+	else if (mediaItem.isAudio) {
+		if (mediaItem.audioBitrate > 0) {
+			attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.audioBitrate));
+		}
+		else if (mediaItem.totalBitrate > 0) {
+			attributes.push_back (MediaUtil::getBitrateDisplayString (mediaItem.totalBitrate));
+		}
+		attributedesc.assign (UiText::instance->getText (UiTextId::AudioAttributes).capitalized ());
 	}
 
 	if (! attributes.empty ()) {
@@ -276,7 +296,7 @@ void MediaItemUi::doResume () {
 		iconlabel->setFillBg (true, UiConfiguration::instance->mediumBackgroundColor);
 		iconlabel->setPaddingScale (1.0f, 1.0f);
 		iconlabel->setCornerRadius (UiConfiguration::instance->cornerRadius);
-		iconlabel->setMouseHoverTooltip (UiText::instance->getText (UiTextId::MediaAttributesTooltip));
+		iconlabel->setMouseHoverTooltip (attributedesc);
 		iconlabel->setText (attributes.join (", "));
 		cardView->addItem (iconlabel, InfoRow);
 	}
@@ -456,6 +476,15 @@ void MediaItemUi::doUpdate (int msElapsed) {
 			cardView->reflow ();
 		}
 		shouldEnableTagWindow = false;
+	}
+}
+
+void MediaItemUi::doClearPopupWidgets () {
+	if (timelinePopupImageWindow) {
+		timelineWindow->setHighlightedPosition (-1);
+		timelineHoverClock = -1;
+		timelineHoverTimestamp = -1;
+		timelinePopupImageWindowHandle.destroyAndClear ();
 	}
 }
 

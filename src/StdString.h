@@ -162,6 +162,12 @@ public:
 	// Return the string resulting from a jsonEscape operation
 	StdString jsonEscaped () const;
 
+	// Remove markup tags from the string's content and assign it to the resulting value
+	void markupStrip (const char *tagOpen = "<", const char *tagClose = ">");
+
+	// Return the string resulting from a markupStrip operation
+	StdString markupStripped (const char *tagOpen = "<", const char *tagClose = ">") const;
+
 	// Replace the string's content as needed for use as an identifier and assign it to the resulting value
 	void idTranslate ();
 

@@ -167,7 +167,6 @@ bool HashMap::sortAscending (const StdString &a, const StdString &b) {
 	}
 	return (false);
 }
-
 bool HashMap::sortDescending (const StdString &a, const StdString &b) {
 	if (a.lowercased ().compare (b.lowercased ()) > 0) {
 		return (true);
@@ -176,99 +175,49 @@ bool HashMap::sortDescending (const StdString &a, const StdString &b) {
 }
 
 OpResult HashMap::read (const StdString &filename, bool shouldClear) {
-	Buffer *buffer;
-	OpResult result;
-
-	buffer = OsUtil::readFile (filename);
-	if (! buffer) {
-		return (OpResult::FileOpenFailedError);
-	}
-	result = read (buffer, shouldClear);
-	delete (buffer);
-	return (result);
-}
-
-OpResult HashMap::read (Buffer *buffer, bool shouldClear) {
-	uint8_t *data, *end, *key1, *key2, *val1, *val2;
-	char c;
-	bool iscomment;
-	StdString key, val;
-
 	if (shouldClear) {
 		clear ();
 	}
-	data = buffer->data;
-	end = data + buffer->length;
-	iscomment = false;
-	key1 = NULL;
-	key2 = NULL;
-	val1 = NULL;
-	val2 = NULL;
-	while (data < end) {
-		c = (char) *data;
-		++data;
+	return (OsUtil::readFileLines (filename, HashMap::readLine, this));
+}
+OpResult HashMap::readLine (void *itPtr, const StdString &line) {
+	HashMap *it = (HashMap *) itPtr;
+	StdString text, key, val;
+	int pos, textlen;
+	char c;
 
-		if (iscomment) {
-			if (c == '\n') {
-				iscomment = false;
-			}
-			continue;
+	text = line.trimmed ();
+	if (text.empty () || text.startsWith ("#")) {
+		return (OpResult::Success);
+	}
+	textlen = (int) text.length ();
+	if (textlen <= 1) {
+		return (OpResult::Success);
+	}
+	pos = 0;
+	while (pos < (textlen - 1)) {
+		c = text.at (pos);
+		if (isspace (c)) {
+			key = text.substr (0, pos);
+			val = text.substr (pos + 1);
+			break;
 		}
-		if (! key1) {
-			if (c == '#') {
-				iscomment = true;
-				key1 = NULL;
-				key2 = NULL;
-				val1 = NULL;
-				val2 = NULL;
-				continue;
-			}
-			if (! isspace (c)) {
-				key1 = (data - 1);
-			}
-		}
-		else if (! key2) {
-			if (isspace (c)) {
-				key2 = (data - 2);
-			}
-		}
-		else if (! val1) {
-			if (! isspace (c)) {
-				val1 = (data - 1);
-			}
-		}
-		else {
-			if ((c == '\r') || (c == '\n')) {
-				val2 = (data - 2);
-			}
-		}
-
-		if (key1 && key2 && val1 && val2) {
-			key.assign ((char *) key1, key2 - key1 + 1);
-			val.assign ((char *) val1, val2 - val1 + 1);
-			if ((key.length () > 0) && (val.length () > 0)) {
-				valueMap.insert (std::pair<StdString, StdString> (key, val));
-			}
-		}
-
-		if ((c == '\r') || (c == '\n')) {
-			key1 = NULL;
-			key2 = NULL;
-			val1 = NULL;
-			val2 = NULL;
-		}
+		++pos;
+	}
+	if ((! key.empty ()) && (! val.empty ())) {
+		it->valueMap.insert (std::pair<StdString, StdString> (key, val));
 	}
 	return (OpResult::Success);
 }
 
 OpResult HashMap::write (const StdString &filename) {
-	std::map<StdString, StdString>::iterator i1, i2;
+	std::map<StdString, StdString>::const_iterator i1, i2;
 	StdString out;
 
 	isWriteDirty = false;
 	out.assign ("");
-	i1 = valueMap.begin ();
-	i2 = valueMap.end ();
+	i1 = valueMap.cbegin ();
+	i2 = valueMap.cend ();
 	while (i1 != i2) {
 		out.append (i1->first);
 		out.append (" ");
@@ -285,7 +234,6 @@ bool HashMap::exists (const StdString &key) const {
 	i = valueMap.find (key);
 	return (i != valueMap.cend ());
 }
-
 bool HashMap::exists (const char *key) const {
 	return (exists (StdString (key)));
 }
@@ -306,59 +254,45 @@ void HashMap::insert (const StdString &key, const StdString &value) {
 		isSorted = false;
 	}
 }
-
 void HashMap::insert (const char *key, const StdString &value) {
 	insert (StdString (key), value);
 }
-
 void HashMap::insert (const StdString &key, const char *value) {
 	insert (key, StdString (value));
 }
-
 void HashMap::insert (const char *key, const char *value) {
 	insert (StdString (key), StdString (value));
 }
-
 void HashMap::insert (const StdString &key, bool value) {
 	insert (key, value ? StdString ("true") : StdString ("false"));
 }
-
 void HashMap::insert (const char *key, bool value) {
 	insert (StdString (key), value ? StdString ("true") : StdString ("false"));
 }
-
 void HashMap::insert (const StdString &key, int value) {
 	insert (key, StdString::createSprintf ("%i", value));
 }
-
 void HashMap::insert (const char *key, int value) {
 	insert (StdString (key), StdString::createSprintf ("%i", value));
 }
-
 void HashMap::insert (const StdString &key, int64_t value) {
 	insert (key, StdString::createSprintf ("%lli", (long long int) value));
 }
-
 void HashMap::insert (const char *key, int64_t value) {
 	insert (StdString (key), StdString::createSprintf ("%lli", (long long int) value));
 }
-
 void HashMap::insert (const StdString &key, float value) {
 	insert (key, StdString::createSprintf ("%f", value));
 }
-
 void HashMap::insert (const char *key, float value) {
 	insert (StdString (key), StdString::createSprintf ("%f", value));
 }
-
 void HashMap::insert (const StdString &key, double value) {
 	insert (key, StdString::createSprintf ("%f", value));
 }
-
 void HashMap::insert (const char *key, double value) {
 	insert (StdString (key), StdString::createSprintf ("%f", value));
 }
-
 void HashMap::insert (const StdString &key, const StringList &value) {
 	if (value.empty ()) {
 		remove (key);
@@ -367,11 +301,9 @@ void HashMap::insert (const StdString &key, const StringList &value) {
 		insert (key, value.toJsonString ());
 	}
 }
-
 void HashMap::insert (const char *key, const StringList &value) {
 	insert (StdString (key), value);
 }
-
 void HashMap::insert (const StdString &key, JsonList *value) {
 	std::map<StdString, StdString>::iterator i1, i2;
 	JsonList::iterator j1, j2;
@@ -424,11 +356,9 @@ void HashMap::insert (const StdString &key, JsonList *value) {
 	}
 	value->clear ();
 }
-
 void HashMap::insert (const char *key, JsonList *value) {
 	insert (StdString (key), value);
 }
-
 void HashMap::insert (const StdString &key, const StdString &value, const StdString &removeValue) {
 	if (value.equals (removeValue)) {
 		remove (key);
@@ -437,7 +367,6 @@ void HashMap::insert (const StdString &key, const StdString &value, const StdStr
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, const StdString &value, const StdString &removeValue) {
 	if (value.equals (removeValue)) {
 		remove (key);
@@ -446,7 +375,6 @@ void HashMap::insert (const char *key, const StdString &value, const StdString &
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, const char *value, const char *removeValue) {
 	if (StdString (value).equals (StdString (removeValue))) {
 		remove (key);
@@ -455,7 +383,6 @@ void HashMap::insert (const StdString &key, const char *value, const char *remov
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, const char *value, const char *removeValue) {
 	if (StdString (value).equals (StdString (removeValue))) {
 		remove (key);
@@ -464,7 +391,6 @@ void HashMap::insert (const char *key, const char *value, const char *removeValu
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, bool value, bool removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -473,7 +399,6 @@ void HashMap::insert (const StdString &key, bool value, bool removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, bool value, bool removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -482,7 +407,6 @@ void HashMap::insert (const char *key, bool value, bool removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, int value, int removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -491,7 +415,6 @@ void HashMap::insert (const StdString &key, int value, int removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, int value, int removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -500,7 +423,6 @@ void HashMap::insert (const char *key, int value, int removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, int64_t value, int64_t removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -509,7 +431,6 @@ void HashMap::insert (const StdString &key, int64_t value, int64_t removeValue) 
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, int64_t value, int64_t removeValue) {
 	if (value == removeValue) {
 		remove (key);
@@ -518,7 +439,6 @@ void HashMap::insert (const char *key, int64_t value, int64_t removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, float value, float removeValue) {
 	if (FLOAT_EQUALS (value, removeValue)) {
 		remove (key);
@@ -527,7 +447,6 @@ void HashMap::insert (const StdString &key, float value, float removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, float value, float removeValue) {
 	if (FLOAT_EQUALS (value, removeValue)) {
 		remove (key);
@@ -536,7 +455,6 @@ void HashMap::insert (const char *key, float value, float removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const StdString &key, double value, double removeValue) {
 	if (FLOAT_EQUALS (value, removeValue)) {
 		remove (key);
@@ -545,7 +463,6 @@ void HashMap::insert (const StdString &key, double value, double removeValue) {
 		insert (key, value);
 	}
 }
-
 void HashMap::insert (const char *key, double value, double removeValue) {
 	if (FLOAT_EQUALS (value, removeValue)) {
 		remove (key);
@@ -565,11 +482,9 @@ void HashMap::remove (const StdString &key) {
 		isSorted = false;
 	}
 }
-
 void HashMap::remove (const char *key) {
 	remove (StdString (key));
 }
-
 void HashMap::remove (const StringList &keys) {
 	StringList::const_iterator i1, i2;
 
@@ -590,15 +505,12 @@ StdString HashMap::find (const StdString &key, const StdString &defaultValue) co
 	}
 	return (i->second);
 }
-
 StdString HashMap::find (const StdString &key, const char *defaultValue) const {
 	return (find (key, StdString (defaultValue)));
 }
-
 StdString HashMap::find (const char *key, const char *defaultValue) const {
 	return (find (StdString (key), StdString (defaultValue)));
 }
-
 int HashMap::find (const StdString &key, int defaultValue) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -608,11 +520,9 @@ int HashMap::find (const StdString &key, int defaultValue) const {
 	}
 	return (atoi (i->second.c_str ()));
 }
-
 int HashMap::find (const char *key, int defaultValue) const {
 	return (find (StdString (key), defaultValue));
 }
-
 int64_t HashMap::find (const StdString &key, int64_t defaultValue) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -622,11 +532,9 @@ int64_t HashMap::find (const StdString &key, int64_t defaultValue) const {
 	}
 	return (atoll (i->second.c_str ()));
 }
-
 int64_t HashMap::find (const char *key, int64_t defaultValue) const {
 	return (find (StdString (key), defaultValue));
 }
-
 bool HashMap::find (const StdString &key, bool defaultValue) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -636,11 +544,9 @@ bool HashMap::find (const StdString &key, bool defaultValue) const {
 	}
 	return (i->second.lowercased ().equals ("true") || i->second.lowercased ().equals ("yes"));
 }
-
 bool HashMap::find (const char *key, bool defaultValue) const {
 	return (find (StdString (key), defaultValue));
 }
-
 float HashMap::find (const StdString &key, float defaultValue) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -650,11 +556,9 @@ float HashMap::find (const StdString &key, float defaultValue) const {
 	}
 	return ((float) atof (i->second.c_str ()));
 }
-
 float HashMap::find (const char *key, float defaultValue) const {
 	return (find (StdString (key), defaultValue));
 }
-
 double HashMap::find (const StdString &key, double defaultValue) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -664,11 +568,9 @@ double HashMap::find (const StdString &key, double defaultValue) const {
 	}
 	return (atof (i->second.c_str ()));
 }
-
 double HashMap::find (const char *key, double defaultValue) const {
 	return (find (StdString (key), defaultValue));
 }
-
 void HashMap::find (const StdString &key, StringList *destList) const {
 	std::map<StdString, StdString>::const_iterator i;
 
@@ -681,11 +583,9 @@ void HashMap::find (const StdString &key, StringList *destList) const {
 		destList->clear ();
 	}
 }
-
 void HashMap::find (const char *key, StringList *destList) const {
 	find (StdString (key), destList);
 }
-
 void HashMap::find (const StdString &key, JsonList *destList) const {
 	Json *json;
 	StdString s;
@@ -707,7 +607,6 @@ void HashMap::find (const StdString &key, JsonList *destList) const {
 		++index;
 	}
 }
-
 void HashMap::find (const char *key, JsonList *destList) const {
 	find (StdString (key), destList);
 }

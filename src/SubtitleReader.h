@@ -30,76 +30,55 @@
 * QUESTIONS OR ADDITIONAL INFORMATION
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
-// Class that stores information received from application news requests
-#ifndef APP_NEWS_H
-#define APP_NEWS_H
+// Class that reads subtitle entries from srt files
+#ifndef SUBTITLE_READER_H
+#define SUBTITLE_READER_H
 
-class Json;
-
-class AppNews {
+class SubtitleReader {
 public:
-	AppNews ();
-	~AppNews ();
-	static AppNews *instance;
+	SubtitleReader ();
+	~SubtitleReader ();
 
-	// Initialize static instance data
-	static void createInstance ();
+	static constexpr const char *srtExtension = "srt";
 
-	// Clear static instance data
-	static void freeInstance ();
-
-	static constexpr const int metadataVersion = 2;
-	static constexpr const char *metadataTableName = "AppNewsMetadata";
+	struct Entry {
+		int64_t startTime;
+		int64_t endTime;
+		StdString text;
+		Entry ():
+			startTime (-1),
+			endTime (-1) { }
+		Entry (int64_t startTime, int64_t endTime, const StdString &text):
+			startTime (startTime),
+			endTime (endTime),
+			text (text) { }
+	};
 
 	// Read-only data members
-	bool isReady;
-	bool isLoading;
-	bool isLoadFailed;
-	StdString databasePath;
+	StdString filePath;
+	std::vector<SubtitleReader::Entry> entryList;
+	int64_t endTime;
 
-	// Set the news store to target the specified database path
-	void configure (const StdString &databasePathValue);
+	// Set the path of the srt file to read
+	void setFilePath (const StdString &filePathValue);
 
-	struct NewsPost {
-		StdString body;
-		int64_t publishTime;
-		int64_t endTime;
-		NewsPost ():
-			publishTime (0),
-			endTime (0) { }
-	};
-	struct NewsState {
-		StdString recordBuildId;
-		StdString updateBuildId;
-		int64_t updatePublishTime;
-		std::list<AppNews::NewsPost> posts;
-		NewsState ():
-			updatePublishTime (0) { }
-	};
-	// Parse news state from a GetApplicationNewsResult command string into the provided struct, and return true if state fields were successfully loaded
-	bool parseCommand (const StdString &command, AppNews::NewsState *state);
+	// Read entries from the configured file path and return a result value
+	OpResult readSubtitles ();
 
-	// Store news state from a GetApplicationNewsResult command string
-	OpResult writeRecord (const StdString &command);
+	// Return the entryList index number matching seekTime, or -1 if no matching entry was found
+	int findEntry (int64_t seekTime);
 
-	// Read stored news state into the provided struct, and return true if state fields were successfully loaded
-	bool readRecord (AppNews::NewsState *state);
+	// Return the timestamp value computed from parsed fields, or -1 if the fields are not valid
+	static int64_t getEntryTime (int h, int m, int s, int ms);
 
 private:
-	// Task functions
-	static void initialize (void *itPtr);
-	OpResult executeInitialize ();
+	// Callback functions
+	static OpResult parseLine (void *itPtr, const StdString &line);
+	OpResult executeParseLine (const StdString &line);
 
-	// Row select callback
-	static int readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames);
-
-	// Execute schema update operations as needed and return a result value
-	OpResult updateSchema (StdString *errorMessage);
-
-	// Read state fields from a GetApplicationNewsResult params object
-	void parseCommandParams (Json *params, AppNews::NewsState *state);
-
-	bool isDatabaseOpen;
-	SDL_mutex *databaseMutex;
+	int stage;
+	int64_t parseStartTime;
+	int64_t parseEndTime;
+	StdString parseText;
 };
 #endif

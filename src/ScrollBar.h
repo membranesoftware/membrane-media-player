@@ -50,6 +50,9 @@ public:
 	// Read-only data members
 	double scrollPosition;
 	double maxScrollPosition;
+	double maxTrackLength;
+	double trackLength;
+	double trackWidth;
 
 	// Set the scrollbar's position and invoke any configured change callback unless shouldSkipCallback is true
 	void setPosition (double positionValue, bool shouldSkipCallback = false);
@@ -65,16 +68,12 @@ public:
 
 protected:
 	// Superclass override methods
-	StdString toStringDetail ();
 	void doUpdate (int msElapsed);
 	bool doProcessMouseState (const Widget::MouseState &mouseState);
 	void doResetInputState ();
 	void doResize ();
 
 private:
-	double maxTrackLength;
-	double trackLength;
-	double trackWidth;
 	Panel *arrowPanel;
 	Image *upArrowImage;
 	Image *downArrowImage;

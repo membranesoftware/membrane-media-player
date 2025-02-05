@@ -50,6 +50,9 @@ Label::Label (const StdString &text, UiConfiguration::FontType fontType, const C
 , maxCharacterHeight (0.0f)
 , descenderHeight (0.0f)
 , isUnderlined (false)
+, isShadowed (false)
+, textShadowDx (0)
+, textShadowDy (0)
 , isObscured (false)
 , maxGlyphTopBearing (0)
 , underlineMargin (0.0f)
@@ -76,11 +79,6 @@ Label::~Label () {
 
 Label *Label::castWidget (Widget *widget) {
 	return (Widget::isWidgetClass (widget, ClassId::Label) ? (Label *) widget : NULL);
-}
-
-StdString Label::toStringDetail () {
-	StdString s;
-	return (s);
 }
 
 double Label::getLinePosition (double targetY) {
@@ -157,6 +155,13 @@ void Label::setUnderlined (bool enable) {
 	}
 }
 
+void Label::setShadowed (bool enable, const Color &shadowColor, int shadowDx, int shadowDy) {
+	textShadowColor.assign (shadowColor);
+	textShadowDx = shadowDx;
+	textShadowDy = shadowDy;
+	isShadowed = enable;
+}
+
 void Label::setObscured (bool enable) {
 	if (isObscured == enable) {
 		return;
@@ -170,7 +175,7 @@ void Label::doDraw (double originX, double originY) {
 	std::list<Font::Glyph *>::iterator i1, i2;
 	IntList::iterator j1, j2;
 	SDL_Rect rect;
-	int x, y, x0, y0, xmax, ymax, kerning;
+	int x, y, x0, y0, xmax, ymax, xdrawpos, ydrawpos, kerning;
 	bool first;
 
 	SDL_LockMutex (textMutex);
@@ -199,20 +204,28 @@ void Label::doDraw (double originX, double originY) {
 		else {
 			kerning = 0;
 		}
-
 		if (! glyph) {
 			x += (int) spaceWidth;
 		}
 		else {
-			rect.x = x + x0 + glyph->leftBearing + kerning;
-			rect.y = y + y0 + maxGlyphTopBearing - glyph->topBearing;
-			if (((rect.x + glyph->advanceWidth) >= 0) && (rect.x < xmax) && ((rect.y + maxGlyphTopBearing) >= 0) && (rect.y < ymax)) {
+			xdrawpos = x + x0 + glyph->leftBearing + kerning;
+			ydrawpos = y + y0 + maxGlyphTopBearing - glyph->topBearing;
+			if (((xdrawpos + glyph->advanceWidth) >= 0) && (xdrawpos < xmax) && ((ydrawpos + maxGlyphTopBearing) >= 0) && (ydrawpos < ymax)) {
 				rect.w = glyph->width;
 				rect.h = glyph->height;
+
+				if (isShadowed) {
+					rect.x = xdrawpos + textShadowDx;
+					rect.y = ydrawpos + textShadowDy;
+					SDL_SetTextureColorMod (glyph->texture, textShadowColor.rByte, textShadowColor.gByte, textShadowColor.bByte);
+					SDL_RenderCopy (App::instance->render, glyph->texture, NULL, &rect);
+				}
+
+				rect.x = xdrawpos;
+				rect.y = ydrawpos;
 				SDL_SetTextureColorMod (glyph->texture, textColor.rByte, textColor.gByte, textColor.bByte);
 				SDL_RenderCopy (App::instance->render, glyph->texture, NULL, &rect);
 			}
-
 			x += glyph->advanceWidth;
 		}
 

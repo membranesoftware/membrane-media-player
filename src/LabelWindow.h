@@ -67,6 +67,9 @@ public:
 	void translateTextColor (const Color &targetColor, int durationMs);
 	void translateTextColor (const Color &startColor, const Color &targetColor, int durationMs);
 
+	// Set the label's shadowed state. If enabled, the label renders a shadow effect under each glyph.
+	void setShadowed (bool enable, const Color &shadowColor = Color (0.0f, 0.0f, 0.0f), int shadowDx = -1, int shadowDy = 1);
+
 	// Return the text string shown in the window's label
 	StdString getText () const;
 

@@ -402,13 +402,18 @@ void TextFieldWindow::fsBrowserWindowClosed (void *itPtr, Widget *widgetPtr) {
 	TextFieldWindow *it = (TextFieldWindow *) itPtr;
 	FsBrowserWindow *fs = (FsBrowserWindow *) widgetPtr;
 	HashMap *prefs;
+	StdString value;
 
 	prefs = App::instance->lockPrefs ();
 	prefs->insert (App::fsBrowserPathKey, fs->browsePath, "");
 	App::instance->unlockPrefs ();
 
 	if (fs->isPathSelectionConfirmed) {
-		it->setValue (fs->selectedPath);
+		value.assign (fs->selectedPath);
+		if ((it->buttonOptions & TextFieldWindow::FsBrowseButtonSelectDirectoriesOption) && (it->buttonOptions & TextFieldWindow::FsBrowseButtonSelectDirectoriesAppendSeparatorOption)) {
+			value = OsUtil::getTrailingSeparatorPath (value);
+		}
+		it->setValue (value);
 	}
 	it->fsBrowserPanelHandle.destroyAndClear ();
 }

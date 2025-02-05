@@ -54,6 +54,7 @@ class ProgressBar;
 class ProgressRing;
 class ScrollBar;
 class ScrollView;
+class Shader;
 class Slider;
 class SliderWindow;
 class TextArea;
@@ -173,6 +174,7 @@ public:
 	ProgressRing *add (ProgressRing *widget, int zLevel = 0);
 	ScrollBar *add (ScrollBar *widget, int zLevel = 0);
 	ScrollView *add (ScrollView *widget, int zLevel = 0);
+	Shader *add (Shader *widget, int zLevel = 0);
 	Slider *add (Slider *widget, int zLevel = 0);
 	SliderWindow *add (SliderWindow *widget, int zLevel = 0);
 	TextArea *add (TextArea *widget, int zLevel = 0);

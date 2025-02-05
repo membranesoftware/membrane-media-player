@@ -51,6 +51,7 @@ public:
 	static constexpr const char *MediaPlayerStart = "media-player-start";
 	static constexpr const char *MediaPlayerScan = "media-player-scan";
 	static constexpr const char *MediaPlayerInterface = "media-player-interface";
+	static constexpr const char *MediaPlayerWindow = "media-player-window";
 	static constexpr const char *MediaInspectorInterface = "media-inspector-interface";
 	static constexpr const char *PlaylistEditorInterface = "playlist-editor-interface";
 

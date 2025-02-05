@@ -86,11 +86,6 @@ ScrollBar::ScrollBar (double maxScrollTrackLength)
 ScrollBar::~ScrollBar () {
 }
 
-StdString ScrollBar::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void ScrollBar::setPosition (double positionValue, bool shouldSkipCallback) {
 	double pos;
 

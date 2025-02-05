@@ -75,11 +75,6 @@ Image::~Image () {
 	SdlUtil::destroyMutex (&spriteTextureMutex);
 }
 
-StdString Image::toStringDetail () {
-	StdString s;
-	return (s);
-}
-
 void Image::setSprite (Sprite *targetSprite, int frame) {
 	SDL_Texture *texture;
 	StdString path;

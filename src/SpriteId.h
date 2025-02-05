@@ -140,6 +140,8 @@ public:
 	static constexpr const char *SpriteGroup_starOutlineButton = "ui/SpriteGroup/sprite/starOutlineButton";
 	static constexpr const char *SpriteGroup_startPositionIcon = "ui/SpriteGroup/sprite/startPositionIcon";
 	static constexpr const char *SpriteGroup_storageIcon = "ui/SpriteGroup/sprite/storageIcon";
+	static constexpr const char *SpriteGroup_subtitleOffButton = "ui/SpriteGroup/sprite/subtitleOffButton";
+	static constexpr const char *SpriteGroup_subtitleOnButton = "ui/SpriteGroup/sprite/subtitleOnButton";
 	static constexpr const char *SpriteGroup_tagIcon = "ui/SpriteGroup/sprite/tagIcon";
 	static constexpr const char *SpriteGroup_taskInProgressIcon = "ui/SpriteGroup/sprite/taskInProgressIcon";
 	static constexpr const char *SpriteGroup_toggleCheckbox = "ui/SpriteGroup/sprite/toggleCheckbox";
@@ -150,6 +152,7 @@ public:
 	static constexpr const char *SpriteGroup_versionIcon = "ui/SpriteGroup/sprite/versionIcon";
 	static constexpr const char *SpriteGroup_visibilityOffButton = "ui/SpriteGroup/sprite/visibilityOffButton";
 	static constexpr const char *SpriteGroup_visibilityOnButton = "ui/SpriteGroup/sprite/visibilityOnButton";
+	static constexpr const char *SpriteGroup_visualizerButton = "ui/SpriteGroup/sprite/visualizerButton";
 	static constexpr const char *SpriteGroup_webLinkIcon = "ui/SpriteGroup/sprite/webLinkIcon";
 
 	// Return a list of all spriteId const values, with an optional prefix to filter results

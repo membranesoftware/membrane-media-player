@@ -169,11 +169,11 @@ public:
 	// Return the number of players in the paused state
 	int getPausedPlayerCount ();
 
-	// Set player sound mix options
-	void setSoundMixOptions (int soundMixVolume, bool isSoundMuted);
+	// Set PlayerControl option values
+	void setPlayerControlOptions (int soundMixVolume, bool isSoundMuted, int visualizerType, bool isSubtitleEnabled);
 
-	// Write player sound mix option values into the provided pointers
-	void getSoundMixOptions (int *soundMixVolume = NULL, bool *isSoundMuted = NULL);
+	// Write current PlayerControl option values into the provided pointers
+	void getPlayerControlOptions (int *soundMixVolume = NULL, bool *isSoundMuted = NULL, int *visualizerType = NULL, bool *isSubtitleEnabled = NULL);
 
 	// Start playback of a media item
 	void playMedia (const StdString &mediaId, int64_t seekTimestamp = 0, bool isDetached = false);

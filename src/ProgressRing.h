@@ -34,7 +34,6 @@
 #ifndef PROGRESS_RING_H
 #define PROGRESS_RING_H
 
-#include "Color.h"
 #include "Widget.h"
 #include "ProgressBar.h"
 

@@ -238,7 +238,7 @@ private:
 	void executeUpdateTasks ();
 
 	// Run the application's state update thread
-	static int runUpdateThread (void *itPtr);
+	static int runUpdates (void *itPtr);
 
 	// Write the prefs file if any prefsMap keys have changed since the last write
 	void writePrefs ();

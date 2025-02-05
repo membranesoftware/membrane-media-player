@@ -30,76 +30,21 @@
 * QUESTIONS OR ADDITIONAL INFORMATION
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
-// Class that stores information received from application news requests
-#ifndef APP_NEWS_H
-#define APP_NEWS_H
+// Object representing a particle for use in effects
+#ifndef PARTICLE_H
+#define PARTICLE_H
 
-class Json;
+#include "Color.h"
+#include "Position.h"
 
-class AppNews {
+class Particle {
 public:
-	AppNews ();
-	~AppNews ();
-	static AppNews *instance;
+	Particle ();
+	Particle (double colorR, double colorG, double colorB, double positionX, double positionY);
+	~Particle ();
 
-	// Initialize static instance data
-	static void createInstance ();
-
-	// Clear static instance data
-	static void freeInstance ();
-
-	static constexpr const int metadataVersion = 2;
-	static constexpr const char *metadataTableName = "AppNewsMetadata";
-
-	// Read-only data members
-	bool isReady;
-	bool isLoading;
-	bool isLoadFailed;
-	StdString databasePath;
-
-	// Set the news store to target the specified database path
-	void configure (const StdString &databasePathValue);
-
-	struct NewsPost {
-		StdString body;
-		int64_t publishTime;
-		int64_t endTime;
-		NewsPost ():
-			publishTime (0),
-			endTime (0) { }
-	};
-	struct NewsState {
-		StdString recordBuildId;
-		StdString updateBuildId;
-		int64_t updatePublishTime;
-		std::list<AppNews::NewsPost> posts;
-		NewsState ():
-			updatePublishTime (0) { }
-	};
-	// Parse news state from a GetApplicationNewsResult command string into the provided struct, and return true if state fields were successfully loaded
-	bool parseCommand (const StdString &command, AppNews::NewsState *state);
-
-	// Store news state from a GetApplicationNewsResult command string
-	OpResult writeRecord (const StdString &command);
-
-	// Read stored news state into the provided struct, and return true if state fields were successfully loaded
-	bool readRecord (AppNews::NewsState *state);
-
-private:
-	// Task functions
-	static void initialize (void *itPtr);
-	OpResult executeInitialize ();
-
-	// Row select callback
-	static int readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames);
-
-	// Execute schema update operations as needed and return a result value
-	OpResult updateSchema (StdString *errorMessage);
-
-	// Read state fields from a GetApplicationNewsResult params object
-	void parseCommandParams (Json *params, AppNews::NewsState *state);
-
-	bool isDatabaseOpen;
-	SDL_mutex *databaseMutex;
+	// Read-write data members
+	Color color;
+	Position position;
 };
 #endif

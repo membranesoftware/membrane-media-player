@@ -346,6 +346,9 @@ const char *ClassId::classIdName (int id) {
 		case ClassId::Panel: {
 			return ("Panel");
 		}
+		case ClassId::Particle: {
+			return ("Particle");
+		}
 		case ClassId::PlayerControl: {
 			return ("PlayerControl");
 		}
@@ -403,6 +406,9 @@ const char *ClassId::classIdName (int id) {
 		case ClassId::SettingsWindow: {
 			return ("SettingsWindow");
 		}
+		case ClassId::Shader: {
+			return ("Shader");
+		}
 		case ClassId::SharedBuffer: {
 			return ("SharedBuffer");
 		}
@@ -444,6 +450,9 @@ const char *ClassId::classIdName (int id) {
 		}
 		case ClassId::StringList: {
 			return ("StringList");
+		}
+		case ClassId::SubtitleReader: {
+			return ("SubtitleReader");
 		}
 		case ClassId::SystemInterface: {
 			return ("SystemInterface");
@@ -504,6 +513,9 @@ const char *ClassId::classIdName (int id) {
 		}
 		case ClassId::Video: {
 			return ("Video");
+		}
+		case ClassId::WaveformShader: {
+			return ("WaveformShader");
 		}
 		case ClassId::Widget: {
 			return ("Widget");

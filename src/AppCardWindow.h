@@ -88,6 +88,7 @@ private:
 	static void aboutButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void nextButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void updateRequestComplete (void *itPtr, const StdString &targetUrl, int statusCode, SharedBuffer *responseData);
+	static void updateLinkOpened (void *itPtr, Widget *widgetPtr);
 
 	// Populate info text content
 	void resetInfoText ();
@@ -144,6 +145,7 @@ private:
 	ProgressBar *updateProgressBar;
 	TextFlow *updateText;
 	HyperlinkWindow *updateLink;
+	Image *headerUpdateIcon;
 	Image *infoIcon;
 	TextFlow *infoText;
 	Button *updateButton;

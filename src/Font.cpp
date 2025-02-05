@@ -101,7 +101,7 @@ OpResult Font::load (Buffer *fontData, int pointSize) {
 	maxw = 0;
 	maxtopbearing = 0;
 	s = (char *) Font::glyphCharacters;
-	while (1) {
+	while (true) {
 		c = *s;
 		if (c == 0) {
 			break;

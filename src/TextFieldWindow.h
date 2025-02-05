@@ -96,6 +96,7 @@ public:
 	static constexpr const int FsBrowseButtonOption = 0x20;
 	static constexpr const int FsBrowseButtonSortDirectoriesFirstOption = 0x40;
 	static constexpr const int FsBrowseButtonSelectDirectoriesOption = 0x80;
+	static constexpr const int FsBrowseButtonSelectDirectoriesAppendSeparatorOption = 0x100;
 	// Set the enable state for the window's utility buttons
 	void setButtonsEnabled (int buttonOptionsValue);
 

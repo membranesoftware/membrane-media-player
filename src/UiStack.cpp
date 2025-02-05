@@ -1285,17 +1285,25 @@ int UiStack::getPausedPlayerCount () {
 	return (playerControl.getPausedPlayerCount ());
 }
 
-void UiStack::setSoundMixOptions (int soundMixVolume, bool isSoundMuted) {
+void UiStack::setPlayerControlOptions (int soundMixVolume, bool isSoundMuted, int visualizerType, bool isSubtitleEnabled) {
 	playerControl.playerSoundMixVolume = soundMixVolume;
 	playerControl.isPlayerSoundMuted = isSoundMuted;
+	playerControl.playerVisualizerType = visualizerType;
+	playerControl.playerSubtitleEnabled = isSubtitleEnabled;
 }
 
-void UiStack::getSoundMixOptions (int *soundMixVolume, bool *isSoundMuted) {
+void UiStack::getPlayerControlOptions (int *soundMixVolume, bool *isSoundMuted, int *visualizerType, bool *isSubtitleEnabled) {
 	if (soundMixVolume) {
 		*soundMixVolume = playerControl.playerSoundMixVolume;
 	}
 	if (isSoundMuted) {
 		*isSoundMuted = playerControl.isPlayerSoundMuted;
+	}
+	if (visualizerType) {
+		*visualizerType = playerControl.playerVisualizerType;
+	}
+	if (isSubtitleEnabled) {
+		*isSubtitleEnabled = playerControl.playerSubtitleEnabled;
 	}
 }
 

@@ -36,7 +36,6 @@
 
 #include "StringList.h"
 
-class Buffer;
 class Json;
 class JsonList;
 
@@ -77,7 +76,6 @@ public:
 
 	// Read values from configuration file data and store the resulting items in the map, optionally clearing the map before doing so. Returns a Result value.
 	OpResult read (const StdString &filename, bool shouldClear = false);
-	OpResult read (Buffer *buffer, bool shouldClear = false);
 
 	// Write values from the map to the specified file. Returns a Result value.
 	OpResult write (const StdString &filename);
@@ -169,6 +167,9 @@ public:
 	static bool sortDescending (const StdString &a, const StdString &b);
 
 private:
+	// Callback functions
+	static OpResult readLine (void *itPtr, const StdString &line);
+
 	// Clear keyList and populate it with key items in sorted order
 	void doSort ();
 
