@@ -35,6 +35,7 @@
 #include "ClassId.h"
 #include "SpriteId.h"
 #include "OsUtil.h"
+#include "PrefsKey.h"
 #include "HashMap.h"
 #include "Prng.h"
 #include "Sprite.h"
@@ -50,8 +51,6 @@
 #include "FsBrowserWindow.h"
 #include "TextField.h"
 #include "TextFieldWindow.h"
-
-constexpr const double fsBrowserWindowScale = 0.83f;
 
 TextFieldWindow::TextFieldWindow (double windowWidth, const StdString &promptText, Sprite *iconSprite)
 : Panel ()
@@ -209,6 +208,11 @@ void TextFieldWindow::setValue (const StdString &valueText, bool shouldSkipChang
 	textField->setValue (valueText, shouldSkipChangeCallback, shouldSkipEditCallback);
 	cancelValue.assign (valueText);
 	reflow ();
+}
+
+void TextFieldWindow::setKeyFocus (bool enable) {
+	Panel::setKeyFocus (enable);
+	textField->setKeyFocus (enable);
 }
 
 void TextFieldWindow::assignKeyFocus () {
@@ -378,14 +382,14 @@ void TextFieldWindow::fsBrowseButtonClicked (void *itPtr, Widget *widgetPtr) {
 	StdString path;
 
 	prefs = App::instance->lockPrefs ();
-	path = prefs->find (App::fsBrowserPathKey, "");
+	path = prefs->find (PrefsKey::fsBrowserPath, "");
 	App::instance->unlockPrefs ();
 	if (path.empty ()) {
 		path = OsUtil::getUserHomePath ();
 	}
 	it->fsBrowserPanelHandle.destroyAndAssign (Ui::createDarkWindowOverlayPanel ());
 
-	fs = (FsBrowserWindow *) it->fsBrowserPanel->add (new FsBrowserWindow (App::instance->drawableWidth * fsBrowserWindowScale, App::instance->drawableHeight * fsBrowserWindowScale, path));
+	fs = (FsBrowserWindow *) it->fsBrowserPanel->add (new FsBrowserWindow (App::instance->drawableWidth * UiConfiguration::instance->fsBrowserWindowScale, App::instance->drawableHeight * UiConfiguration::instance->fsBrowserWindowScale, path));
 	if (it->buttonOptions & TextFieldWindow::FsBrowseButtonSortDirectoriesFirstOption) {
 		fs->sortOrder = FsBrowserWindow::DirectoriesFirstSort;
 	}
@@ -396,6 +400,7 @@ void TextFieldWindow::fsBrowseButtonClicked (void *itPtr, Widget *widgetPtr) {
 	fs->position.assign ((App::instance->drawableWidth - fs->width) / 2.0f, (App::instance->drawableHeight - fs->height) / 2.0f);
 
 	App::instance->rootPanel->addWidget (it->fsBrowserPanel, App::instance->rootPanel->maxWidgetZLevel + 1);
+	it->textField->setKeyFocus (false);
 }
 
 void TextFieldWindow::fsBrowserWindowClosed (void *itPtr, Widget *widgetPtr) {
@@ -405,7 +410,7 @@ void TextFieldWindow::fsBrowserWindowClosed (void *itPtr, Widget *widgetPtr) {
 	StdString value;
 
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (App::fsBrowserPathKey, fs->browsePath, "");
+	prefs->insert (PrefsKey::fsBrowserPath, fs->browsePath, "");
 	App::instance->unlockPrefs ();
 
 	if (fs->isPathSelectionConfirmed) {
@@ -414,8 +419,15 @@ void TextFieldWindow::fsBrowserWindowClosed (void *itPtr, Widget *widgetPtr) {
 			value = OsUtil::getTrailingSeparatorPath (value);
 		}
 		it->setValue (value);
+		it->eventCallback (it->fsBrowserPathSelectCallback);
 	}
 	it->fsBrowserPanelHandle.destroyAndClear ();
+}
+
+void TextFieldWindow::mouseClickFsBrowseButton () {
+	if (fsBrowseButton->isVisible) {
+		fsBrowseButton->mouseClick ();
+	}
 }
 
 void TextFieldWindow::visibilityToggleStateChanged (void *itPtr, Widget *widgetPtr) {

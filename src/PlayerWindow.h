@@ -74,7 +74,6 @@ public:
 	double windowHeight;
 	bool isMaximized;
 	bool isFullscreen;
-	int recordType;
 	MediaItem targetMedia;
 	StdString playPath;
 	double playSeekPercent;
@@ -96,7 +95,10 @@ public:
 	// Stop video playback in progress
 	void stop ();
 
-	// Set the MediaItem record to target for playback
+	// Set a path value as the target for playback
+	void setPlayTargetPath (const StdString &playPathValue);
+
+	// Set a MediaItem record as the target for playback
 	void setPlayMedia (const StdString &mediaId);
 
 	// Set the seek position for play operations
@@ -153,6 +155,9 @@ private:
 	// Set widgetName values for control widgets
 	void setWidgetNames ();
 
+	// Change the fast seek target by applying the specified timestamp delta
+	void fastSeek (int64_t seekTimestampDelta);
+
 	// Restart playback at the specified position
 	void executeSeekPercent (double targetPercent);
 	void executeSeekTimestamp (int64_t targetTimestamp);
@@ -188,6 +193,9 @@ private:
 	int timelineHoverClock;
 	WidgetHandle<ImageWindow> timelinePopupHandle;
 	ImageWindow *timelinePopup;
+	int fastSeekClock;
+	int64_t fastSeekTimestamp;
+	IconLabelWindow *fastSeekIcon;
 	Button *visualizerButton;
 	WidgetHandle<WaveformShader> waveformHandle;
 	WaveformShader *waveform;
@@ -201,8 +209,11 @@ private:
 	ProgressRing *progressRing;
 	int progressRingShowClock;
 	bool isPlayStarting;
+	bool isPlayFailed;
+	int playStartSeekEnableClock;
 	Position maximizePosition;
 	double maximizeWidth;
 	double maximizeHeight;
+	MediaItem playHistoryMedia;
 };
 #endif

@@ -60,16 +60,6 @@ public:
 	static constexpr const int prefsVersion = 1;
 	static constexpr const char *databaseWriteQueueId = "databaseWrite";
 
-	// Key values for the prefs map
-	static constexpr const char *networkThreadsKey = "AppA";
-	static constexpr const char *displayModeKey = "AppB";
-	static constexpr const char *fontScaleKey = "AppC";
-	static constexpr const char *allowUnverifiedHttpsKey = "AppD";
-	static constexpr const char *prefsVersionKey = "AppE";
-	static constexpr const char *soundVolumeKey = "AppF";
-	static constexpr const char *fsBrowserPathKey = "AppG";
-	static constexpr const char *languageKey = "AppH";
-
 	// Read-write data members
 	Log log;
 	StdString prefsPath;

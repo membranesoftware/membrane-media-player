@@ -175,6 +175,7 @@ public:
 	double smallThumbnailImageScale; // portion of total window width, from 0.0f to 1.0f
 	double mediumThumbnailImageScale; // portion of total window width, from 0.0f to 1.0f
 	double largeThumbnailImageScale; // portion of total window width, from 0.0f to 1.0f
+	double fsBrowserWindowScale; // portion of total window width, from 0.0f to 1.0f
 	double popupThumbnailImageScale; // portion of total window width, from 0.0f to 1.0f
 	bool isLoaded;
 	ButtonGradientMiddleSprite *buttonGradientMiddleSprite;

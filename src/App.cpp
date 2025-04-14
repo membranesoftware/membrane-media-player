@@ -50,11 +50,10 @@
 #include "UiConfiguration.h"
 #include "UiText.h"
 #include "UiLog.h"
-#include "AppNews.h"
-#include "PlayerUi.h"
 #include "SystemInterface.h"
 #include "AppUrl.h"
 #include "RecordStore.h"
+#include "PrefsKey.h"
 #include "TaskGroup.h"
 #include "Database.h"
 #include "Input.h"
@@ -72,13 +71,14 @@
 #include "Panel.h"
 #include "ConsoleWindow.h"
 #include "MediaControl.h"
+#include "MediaSearchGroup.h"
 #include "App.h"
 
 constexpr const SDL_Keycode quitKeycode = SDLK_q;
 constexpr const SDL_Keycode settingsKeycode = SDLK_s;
 constexpr const SDL_Keycode helpKeycode = SDLK_h;
 constexpr const SDL_Keycode logKeycode = SDLK_l;
-constexpr const SDL_Keycode consoleKeycode = SDLK_o;
+constexpr const SDL_Keycode consoleKeycode = SDLK_e;
 constexpr const int defaultMinFrameDelay = 10;
 constexpr const double pointerOffsetScaleX = 0.5f;
 constexpr const double pointerOffsetScaleY = 0.25f;
@@ -104,9 +104,9 @@ void App::createInstance (bool shouldSkipInit) {
 	AppUrl::createInstance ();
 	RecordStore::createInstance ();
 	MediaControl::createInstance ();
+	MediaSearchGroup::createInstance ();
 	Input::createInstance ();
 	UiLog::createInstance ();
-	AppNews::createInstance ();
 	UiStack::createInstance ();
 	UiText::createInstance ();
 	UiConfiguration::createInstance ();
@@ -124,9 +124,9 @@ void App::freeInstance () {
 	UiConfiguration::freeInstance ();
 	UiText::freeInstance ();
 	UiStack::freeInstance ();
-	AppNews::freeInstance ();
 	UiLog::freeInstance ();
 	Input::freeInstance ();
+	MediaSearchGroup::freeInstance ();
 	MediaControl::freeInstance ();
 	RecordStore::freeInstance ();
 	AppUrl::freeInstance ();
@@ -320,9 +320,9 @@ int App::run (int argCount, char **argValues) {
 			prefsMap.clear ();
 		}
 	}
-	prefsMap.insert (App::prefsVersionKey, App::prefsVersion);
-	language = prefsMap.find (App::languageKey, UiText::defaultLanguage);
-	isStartUpdateEnabled = prefsMap.find (PlayerUi::startUpdateKey, true);
+	prefsMap.insert (PrefsKey::prefsVersion, App::prefsVersion);
+	language = prefsMap.find (PrefsKey::language, UiText::defaultLanguage);
+	isStartUpdateEnabled = prefsMap.find (PrefsKey::startUpdate, true);
 
 	result = Resource::instance->open ();
 	if (result != OpResult::Success) {
@@ -334,8 +334,8 @@ int App::run (int argCount, char **argValues) {
 		Log::err ("Failed to load text resources; language=\"%s\" err=%i", language.c_str (), result);
 		return (result);
 	}
-	Network::instance->maxRequestThreads = prefsMap.find (App::networkThreadsKey, Network::defaultMaxRequestThreads);
-	Network::instance->allowUnverifiedHttps = prefsMap.find (App::allowUnverifiedHttpsKey, false);
+	Network::instance->maxRequestThreads = prefsMap.find (PrefsKey::networkThreads, Network::defaultMaxRequestThreads);
+	Network::instance->allowUnverifiedHttps = prefsMap.find (PrefsKey::allowUnverifiedHttps, false);
 	Network::instance->httpUserAgent.sprintf ("Membrane Media Player/%s_%s", BUILD_ID, PLATFORM_ID);
 	result = Network::instance->start ();
 	if (result != OpResult::Success) {
@@ -345,7 +345,7 @@ int App::run (int argCount, char **argValues) {
 
 	result = MediaControl::instance->start ();
 	if (result != OpResult::Success) {
-		Log::err ("Failed to start media library processes; err=%i", result);
+		Log::err ("Failed to start media processes; err=%i", result);
 		return (result);
 	}
 
@@ -392,7 +392,7 @@ int App::runWindow () {
 	i = -1;
 	modename = OsUtil::getEnvValue (OsUtil::displayModeEnvKey, "");
 	if (modename.empty ()) {
-		modename = prefsMap.find (App::displayModeKey, "");
+		modename = prefsMap.find (PrefsKey::displayMode, "");
 	}
 	if (! modename.empty ()) {
 		i = RenderResource::instance->getNamedDisplayMode (modename);
@@ -405,7 +405,7 @@ int App::runWindow () {
 			i = RenderResource::instance->getFitWindowDisplayMode (w, h);
 			if (i >= 0) {
 				Log::debug ("Set display mode \"%s\" for drawable bounds %ix%i", RenderResource::instance->displayModes[i].name.c_str (), w, h);
-				prefsMap.insert (App::displayModeKey, RenderResource::instance->displayModes[i].name);
+				prefsMap.insert (PrefsKey::displayMode, RenderResource::instance->displayModes[i].name);
 			}
 		}
 	}
@@ -443,7 +443,7 @@ int App::runWindow () {
 		SDL_ShowCursor (SDL_ENABLE);
 	}
 
-	i = prefsMap.find (App::fontScaleKey, RenderResource::fontScaleCount / 2);
+	i = prefsMap.find (PrefsKey::fontScale, RenderResource::fontScaleCount / 2);
 	if ((i >= 0) && (i < RenderResource::fontScaleCount)) {
 		fontScale = RenderResource::instance->fontScales[i];
 	}
@@ -680,8 +680,8 @@ void App::update (int msElapsed) {
 	Ui *ui;
 
 	TaskGroup::instance->update (msElapsed);
-	UiLog::instance->update (msElapsed);
 	MediaControl::instance->update (msElapsed);
+	MediaSearchGroup::instance->update (msElapsed);
 	CaptureWriter::instance->update (msElapsed);
 
 	if (shouldResizeUi) {
@@ -884,7 +884,7 @@ void App::setDisplayMode (int mode) {
 	CaptureWriter::instance->stopMediaWriter ();
 	addPostdrawTask (App::resizeWindow, &(RenderResource::instance->displayModes[mode]));
 	SDL_LockMutex (prefsMapMutex);
-	prefsMap.insert (App::displayModeKey, RenderResource::instance->displayModes[mode].name);
+	prefsMap.insert (PrefsKey::displayMode, RenderResource::instance->displayModes[mode].name);
 	SDL_UnlockMutex (prefsMapMutex);
 }
 void App::resizeWindow (void *modePtr) {
@@ -947,7 +947,7 @@ void App::setFontScale (int scale) {
 	}
 	addPredrawTask (App::resizeFonts, &(RenderResource::instance->fontScales[scale]));
 	SDL_LockMutex (prefsMapMutex);
-	prefsMap.insert (App::fontScaleKey, scale);
+	prefsMap.insert (PrefsKey::fontScale, scale);
 	SDL_UnlockMutex (prefsMapMutex);
 }
 void App::resizeFonts (void *doublePtr) {

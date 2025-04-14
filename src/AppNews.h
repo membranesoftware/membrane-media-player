@@ -40,25 +40,6 @@ class AppNews {
 public:
 	AppNews ();
 	~AppNews ();
-	static AppNews *instance;
-
-	// Initialize static instance data
-	static void createInstance ();
-
-	// Clear static instance data
-	static void freeInstance ();
-
-	static constexpr const int metadataVersion = 2;
-	static constexpr const char *metadataTableName = "AppNewsMetadata";
-
-	// Read-only data members
-	bool isReady;
-	bool isLoading;
-	bool isLoadFailed;
-	StdString databasePath;
-
-	// Set the news store to target the specified database path
-	void configure (const StdString &databasePathValue);
 
 	struct NewsPost {
 		StdString body;
@@ -68,38 +49,30 @@ public:
 			publishTime (0),
 			endTime (0) { }
 	};
-	struct NewsState {
-		StdString recordBuildId;
-		StdString updateBuildId;
-		int64_t updatePublishTime;
-		std::list<AppNews::NewsPost> posts;
-		NewsState ():
-			updatePublishTime (0) { }
-	};
-	// Parse news state from a GetApplicationNewsResult command string into the provided struct, and return true if state fields were successfully loaded
-	bool parseCommand (const StdString &command, AppNews::NewsState *state);
 
-	// Store news state from a GetApplicationNewsResult command string
-	OpResult writeRecord (const StdString &command);
+	// Read-only data members
+	std::list<AppNews::NewsPost> posts;
+	StdString updateBuildId;
+	int64_t updatePublishTime;
+	StdString recordBuildId;
 
-	// Read stored news state into the provided struct, and return true if state fields were successfully loaded
-	bool readRecord (AppNews::NewsState *state);
+	// Parse news state from a GetApplicationNewsResult command string and return true if fields were successfully loaded
+	bool parseCommand (const StdString &command);
+
+	// Generate SQL statements to insert a GetApplicationNewsResult command record, append them to destList, and return true if the operation succeeded
+	static bool getInsertCommandSql (const StdString &command, const char *tableName, StringList *destList);
+
+	// Read news state from the specified database, and return true if state fields were successfully loaded
+	bool readRecord (const StdString &databasePath, const char *tableName, StdString *errorMessage = NULL);
+
+	// Return an SQL CREATE TABLE statement that creates a table of AppNews records
+	static StdString getCreateTableSql (const char *tableName);
 
 private:
-	// Task functions
-	static void initialize (void *itPtr);
-	OpResult executeInitialize ();
-
 	// Row select callback
 	static int readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames);
 
-	// Execute schema update operations as needed and return a result value
-	OpResult updateSchema (StdString *errorMessage);
-
 	// Read state fields from a GetApplicationNewsResult params object
-	void parseCommandParams (Json *params, AppNews::NewsState *state);
-
-	bool isDatabaseOpen;
-	SDL_mutex *databaseMutex;
+	void parseCommandParams (Json *params);
 };
 #endif

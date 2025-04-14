@@ -52,6 +52,8 @@
 #include "UiStack.h"
 #include "Ui.h"
 
+constexpr const SDL_Keycode clearPopupCode = SDLK_ESCAPE;
+
 Ui::Ui ()
 : classId (-1)
 , rootPanel (NULL)
@@ -111,15 +113,13 @@ bool Ui::isUiClass (Ui *ui, int classIdValue) {
 }
 
 OpResult Ui::load () {
-	StdString path;
 	OpResult result;
 
 	if (isLoaded) {
 		return (OpResult::Success);
 	}
-	path = getSpritePath ();
-	if (! path.empty ()) {
-		result = sprites.load (path);
+	if (! spritePrefix.empty ()) {
+		result = sprites.load (spritePrefix);
 		if (result != OpResult::Success) {
 			Log::err ("Failed to load sprite resources");
 			return (result);
@@ -167,11 +167,6 @@ void Ui::doUnload () {
 	// Default implementation does nothing
 }
 
-StdString Ui::getSpritePath () {
-	// Default implementation returns an empty path
-	return (StdString ());
-}
-
 bool Ui::eventCallback (const Ui::EventCallbackContext &callback) {
 	if (! callback.callback) {
 		return (false);
@@ -217,7 +212,12 @@ bool Ui::keyEvent (void *itPtr, SDL_Keycode keycode, bool isShiftDown, bool isCo
 }
 
 bool Ui::processKeyEvent (SDL_Keycode keycode, bool isShiftDown, bool isControlDown) {
-	// Base class method takes no action
+	if (keycode == clearPopupCode) {
+		if (actionWidget || toolPopup) {
+			clearPopupWidgets ();
+			return (true);
+		}
+	}
 	return (doProcessKeyEvent (keycode, isShiftDown, isControlDown));
 }
 bool Ui::doProcessKeyEvent (SDL_Keycode keycode, bool isShiftDown, bool isControlDown) {
@@ -775,10 +775,9 @@ Button *Ui::createImageSizeButton () {
 }
 
 void Ui::imageSizeButtonClicked (void *itPtr, Widget *widgetPtr) {
-	Ui *it;
+	Ui *it = (Ui *) itPtr;
 	Menu *menu;
 
-	it = (Ui *) itPtr;
 	UiStack::instance->suspendMouseHover ();
 	if (it->clearActionPopup (widgetPtr, Ui::imageSizeButtonClicked)) {
 		return;

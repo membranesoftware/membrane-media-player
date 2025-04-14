@@ -69,6 +69,7 @@ public:
 	Panel *rootPanel;
 	bool isLoaded;
 	bool isFirstResumeComplete;
+	StdString spritePrefix;
 
 	// Increase the object's refcount
 	void retain ();
@@ -160,9 +161,6 @@ public:
 	static Button *createToolbarIconButton (Sprite *buttonSprite, Widget::EventCallbackContext clickCallback, const StdString &mouseHoverTooltipText = StdString (), const char *widgetName = NULL, SDL_Keycode shortcutKey = SDLK_UNKNOWN);
 
 protected:
-	// Return a resource path containing images to be loaded into the sprites object, or an empty string to disable sprite loading
-	virtual StdString getSpritePath ();
-
 	// Return a newly created widget for use as a main toolbar breadcrumb item
 	virtual Widget *createBreadcrumbWidget ();
 

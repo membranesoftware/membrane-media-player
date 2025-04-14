@@ -205,13 +205,17 @@ static bool awaitResult_exec (void *dataPtr) {
 	return (true);
 }
 static int exec (lua_State *L) {
-	char buf[1024];
+	char buf[1024], c;
 	bool result;
 	StateData data;
 
 	memset (&data, 0, sizeof (data));
 	LuaFunction::argvString (L, 1, &(data.targetName));
 	LuaFunction::argvString (L, 2, &(data.value), true);
+	if (! data.value) {
+		c = '\0';
+		data.value = &c;
+	}
 	result = LuaFunction::awaitResult (awaitResult_exec, &data);
 	if (! result) {
 		snprintf (buf, sizeof (buf), "setvalue: failed to update widget; controlName=\"%s\"", data.targetName);

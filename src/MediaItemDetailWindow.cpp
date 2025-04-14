@@ -72,7 +72,10 @@ MediaItemDetailWindow::MediaItemDetailWindow (Json *mediaItemRecord)
 	else if (mediaItem.totalBitrate > 0) {
 		text.appendSprintf ("%s  ", MediaUtil::getBitrateDisplayString (mediaItem.totalBitrate).c_str ());
 	}
-	text.appendSprintf ("%s  %s", UiText::instance->getByteCountText (mediaItem.mediaFileSize).c_str (), UiText::instance->getDurationText (mediaItem.duration).c_str ());
+	if (mediaItem.mediaFileSize > 0) {
+		text.appendSprintf ("%s  ", UiText::instance->getByteCountText (mediaItem.mediaFileSize).c_str ());
+	}
+	text.append (UiText::instance->getDurationText (mediaItem.duration).c_str ());
 	descriptionLabel->setTextColor (UiConfiguration::instance->inverseTextColor);
 	descriptionLabel->setFillBg (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->scrimBackgroundAlpha));
 	descriptionLabel->setPaddingScale (1.0f, 0.5f);

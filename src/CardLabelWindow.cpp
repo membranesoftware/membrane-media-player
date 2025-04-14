@@ -36,13 +36,16 @@
 #include "UiConfiguration.h"
 #include "Sprite.h"
 #include "Font.h"
+#include "Color.h"
 #include "Widget.h"
 #include "Label.h"
+#include "LabelWindow.h"
 #include "CardLabelWindow.h"
 
 CardLabelWindow::CardLabelWindow (double windowWidth)
 : Panel ()
 , windowWidth (windowWidth)
+, leftLabelHandle (&leftLabel)
 {
 	classId = ClassId::CardLabelWindow;
 	isInputSuspended = true;
@@ -50,7 +53,7 @@ CardLabelWindow::CardLabelWindow (double windowWidth)
 	setFillBg (true, UiConfiguration::instance->mediumBackgroundColor);
 	setBorder (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->selectionBorderAlpha), 1.0f);
 	setPaddingScale (1.0f, 0.5f);
-	label = add (new Label (StdString (), UiConfiguration::CaptionFont, UiConfiguration::instance->primaryTextColor));
+	mainLabel = add (new Label (StdString (), UiConfiguration::CaptionFont, UiConfiguration::instance->primaryTextColor));
 
 	reflow ();
 }
@@ -62,22 +65,60 @@ void CardLabelWindow::setWindowWidth (double widthValue) {
 		return;
 	}
 	windowWidth = widthValue;
-	label->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (labelText, windowWidth - (widthPadding * 2.0f), Font::dotTruncateSuffix));
+	resetMainLabel ();
 	reflow ();
 }
 
-void CardLabelWindow::setText (const StdString &text) {
-	if (labelText.equals (text)) {
+void CardLabelWindow::setMainText (const StdString &text) {
+	if (mainLabelText.equals (text)) {
 		return;
 	}
-	labelText.assign (text);
-	label->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (labelText, windowWidth - (widthPadding * 2.0f), Font::dotTruncateSuffix));
+	mainLabelText.assign (text);
+	resetMainLabel ();
 	reflow ();
+}
+
+void CardLabelWindow::setLeftText (const StdString &text, const Color &textColor, const Color &textBgColor) {
+	if (text.empty ()) {
+		leftLabelHandle.destroyAndClear ();
+	}
+	else {
+		leftLabelHandle.destroyAndAssign (new LabelWindow (new Label (text, UiConfiguration::CaptionFont, textColor)));
+		leftLabel->setPaddingScale (1.0f, 0.5f);
+		leftLabel->setFillBg (true, textBgColor);
+		leftLabel->reflow ();
+		add (leftLabel);
+	}
+	resetMainLabel ();
+	reflow ();
+}
+
+void CardLabelWindow::resetMainLabel () {
+	double w;
+
+	if (leftLabel) {
+		w = windowWidth - (leftLabel->width + UiConfiguration::instance->marginSize) - widthPadding;
+	}
+	else {
+		w = windowWidth - (widthPadding * 2.0f);
+	}
+	mainLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (mainLabelText, w, Font::dotTruncateSuffix));
 }
 
 void CardLabelWindow::reflow () {
 	resetPadding ();
 	topLeftLayoutFlow ();
-	label->flowDown (&layoutFlow);
-	setFixedSize (true, windowWidth, layoutFlow.yExtent + heightPadding);
+	if (leftLabel) {
+		layoutFlow.x = 0.0f;
+		layoutFlow.y = 0.0f;
+		leftLabel->flowRight (&layoutFlow);
+		mainLabel->flowRight (&layoutFlow);
+		setFixedSize (true, windowWidth, layoutFlow.yExtent);
+		layoutFlow.y = 0.0f;
+		mainLabel->centerVertical (&layoutFlow);
+	}
+	else {
+		mainLabel->flowDown (&layoutFlow);
+		setFixedSize (true, windowWidth, layoutFlow.yExtent + heightPadding);
+	}
 }

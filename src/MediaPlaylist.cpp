@@ -34,11 +34,9 @@
 #include "StringList.h"
 #include "Int64List.h"
 #include "Database.h"
+#include "RecordStore.h"
+#include "MediaItem.h"
 #include "MediaPlaylist.h"
-
-const StdString MediaPlaylist::createTableSql = StdString ("CREATE TABLE IF NOT EXISTS MediaPlaylist(id TEXT, name TEXT, mediaIds TEXT, startTimestamps TEXT, isExpanded INTEGER, isShuffle INTEGER, startPosition INTEGER, playDuration INTEGER); CREATE UNIQUE INDEX IF NOT EXISTS MediaPlaylistId ON MediaPlaylist(id);");
-constexpr const char *selectSql = "SELECT id, name, mediaIds, startTimestamps, isExpanded, isShuffle, startPosition, playDuration FROM MediaPlaylist";
-constexpr const int selectColumnCount = 8;
 
 MediaPlaylist::MediaPlaylist ()
 : isExpanded (false)
@@ -74,28 +72,83 @@ void MediaPlaylist::copyValues (const MediaPlaylist &source) {
 	i1 = source.items.cbegin ();
 	i2 = source.items.cend ();
 	while (i1 != i2) {
-		items.push_back (MediaPlaylistItem (i1->mediaId, i1->startTimestamp));
+		items.push_back (MediaPlaylistItem (*i1));
 		++i1;
 	}
 }
 
-bool MediaPlaylist::readDatabaseRows (const StdString &databasePath, StdString *errorMessage, std::list<MediaPlaylist> *destList) {
-	StdString sql;
-	OpResult result;
+void MediaPlaylist::resetId () {
+	id = RecordStore::instance->getRecordId (MediaPlaylist::idCommandType);
+}
 
-	destList->clear ();
-	sql.assign (selectSql);
-	sql.append (";");
-	result = Database::instance->exec (databasePath, sql, errorMessage, MediaPlaylist::readDatabaseRows_row, destList);
-	if (result != OpResult::Success) {
+constexpr const char *selectPlaylistSql = "SELECT id, name, isExpanded, isShuffle, startPosition, playDuration FROM ";
+constexpr const int selectPlaylistColumnCount = 6;
+constexpr const char *selectPlaylistItemSql = "SELECT id, name, mediaPath, duration, isVideo, isAudio, hasAudioAlbumArt, width, height, playSeekTimestamp FROM ";
+constexpr const int selectPlaylistItemColumnCount = 10;
+bool MediaPlaylist::copyDatabaseRowValues (int columnCount, char **columnValues, char **columnNames) {
+	char *val;
+	int i;
+
+	if (columnCount < selectPlaylistColumnCount) {
 		return (false);
 	}
+	i = 0;
+	val = columnValues[i];
+	id.assign (val ? val : "");
+
+	++i;
+	val = columnValues[i];
+	name.assign (val ? val : "");
+
+	++i;
+	val = columnValues[i];
+	isExpanded = val ? (*val != '0') : false;
+
+	++i;
+	val = columnValues[i];
+	isShuffle = val ? (*val != '0') : false;
+
+	++i;
+	val = columnValues[i];
+	startPosition = val ? StdString (val).parsedInt ((int) 0) : 0;
+
+	++i;
+	val = columnValues[i];
+	playDuration = val ? StdString (val).parsedInt ((int) 0) : 0;
+
+	return (true);
+}
+
+bool MediaPlaylist::readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<MediaPlaylist> *destList) {
+	StdString sql;
+	OpResult result;
+	std::list<MediaPlaylist>::iterator i1, i2;
+
+	destList->clear ();
 	if (errorMessage) {
 		errorMessage->assign ("");
 	}
+	sql.assign (selectPlaylistSql);
+	sql.append (tableName);
+	sql.append (";");
+	result = Database::instance->exec (databasePath, sql, errorMessage, MediaPlaylist::readDatabaseRows_playlistRow, destList);
+	if (result != OpResult::Success) {
+		return (false);
+	}
+	i1 = destList->begin ();
+	i2 = destList->end ();
+	while (i1 != i2) {
+		sql.assign (selectPlaylistItemSql);
+		sql.append (tableName);
+		sql.append ("Item WHERE playlistId=");
+		sql.append (Database::getColumnValueSql (i1->id));
+		sql.append (" ORDER BY sortKey ASC;");
+		result = Database::instance->exec (databasePath, sql, errorMessage, MediaPlaylist::readDatabaseRows_itemRow, &(i1->items));
+		++i1;
+	}
 	return (true);
 }
-int MediaPlaylist::readDatabaseRows_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames) {
+int MediaPlaylist::readDatabaseRows_playlistRow (void *destListPtr, int columnCount, char **columnValues, char **columnNames) {
 	MediaPlaylist playlist;
 
 	if (! playlist.copyDatabaseRowValues (columnCount, columnValues, columnNames)) {
@@ -104,90 +157,72 @@ int MediaPlaylist::readDatabaseRows_row (void *destListPtr, int columnCount, cha
 	((std::list<MediaPlaylist> *) destListPtr)->push_back (playlist);
 	return (0);
 }
-
-bool MediaPlaylist::copyDatabaseRowValues (int columnCount, char **columnValues, char **columnNames) {
+int MediaPlaylist::readDatabaseRows_itemRow (void *itemVectorPtr, int columnCount, char **columnValues, char **columnNames) {
+	MediaPlaylistItem item;
 	char *val;
-	StringList mediaids;
-	StringList::const_iterator i;
-	Int64List starttimestamps;
-	Int64List::const_iterator j;
-	int count;
+	int i;
 
-	if (columnCount < selectColumnCount) {
-		return (false);
+	if (columnCount < selectPlaylistItemColumnCount) {
+		return (-1);
 	}
-	items.clear ();
+	i = 0;
+	val = columnValues[i];
+	item.id.assign (val ? val : "");
 
-	val = columnValues[0];
-	id.assign (val ? val : "");
+	++i;
+	val = columnValues[i];
+	item.name.assign (val ? val : "");
 
-	val = columnValues[1];
-	name.assign (val ? val : "");
+	++i;
+	val = columnValues[i];
+	item.mediaPath.assign (val ? val : "");
 
-	val = columnValues[2];
-	if ((! val) || (! mediaids.parseJsonString (StdString (val)))) {
-		mediaids.clear ();
-	}
+	++i;
+	val = columnValues[i];
+	item.duration = val ? StdString (val).parsedInt ((int64_t) 0) : 0;
 
-	val = columnValues[3];
-	if ((! val) || (! starttimestamps.parseJsonString (StdString (val)))) {
-		starttimestamps.clear ();
-	}
+	++i;
+	val = columnValues[i];
+	item.isVideo = val ? (*val != '0') : false;
 
-	count = (int) mediaids.size ();
-	if (count < (int) starttimestamps.size ()) {
-		count = (int) starttimestamps.size ();
-	}
-	i = mediaids.cbegin ();
-	j = starttimestamps.cbegin ();
-	while (count > 0) {
-		items.push_back (MediaPlaylistItem (*i, *j));
-		++i;
-		++j;
-		--count;
-	}
+	++i;
+	val = columnValues[i];
+	item.isAudio = val ? (*val != '0') : false;
 
-	val = columnValues[4];
-	isExpanded = val ? (*val != '0') : false;
+	++i;
+	val = columnValues[i];
+	item.hasAudioAlbumArt = val ? (*val != '0') : false;
 
-	val = columnValues[5];
-	isShuffle = val ? (*val != '0') : false;
+	++i;
+	val = columnValues[i];
+	item.width = val ? StdString (val).parsedInt ((int) 0) : 0;
 
-	val = columnValues[6];
-	startPosition = val ? StdString (val).parsedInt ((int) 0) : 0;
+	++i;
+	val = columnValues[i];
+	item.height = val ? StdString (val).parsedInt ((int) 0) : 0;
 
-	val = columnValues[7];
-	playDuration = val ? StdString (val).parsedInt ((int) 0) : 0;
+	++i;
+	val = columnValues[i];
+	item.playSeekTimestamp = val ? StdString (val).parsedInt ((int64_t) 0) : 0;
 
-	return (true);
+	((std::vector<MediaPlaylistItem> *) itemVectorPtr)->push_back (item);
+	return (0);
 }
 
-StdString MediaPlaylist::getUpsertSql () const {
+void MediaPlaylist::getUpsertSql (const char *tableName, StringList *destList) const {
+	StringList fields;
 	StdString sql, update;
-	StringList mediaids, fields;
-	Int64List starttimestamps;
 	std::vector<MediaPlaylistItem>::const_iterator i1, i2;
-	int j;
+	int i, sortkey;
 
-	if (name.empty ()) {
-		return (StdString ());
+	destList->clear ();
+	if (id.empty () || name.empty ()) {
+		return;
 	}
-	i1 = items.cbegin ();
-	i2 = items.cend ();
-	while (i1 != i2) {
-		mediaids.push_back (i1->mediaId);
-		starttimestamps.push_back (i1->startTimestamp);
-		++i1;
-	}
-
 	fields.push_back (StdString ("id"));
 	fields.push_back (Database::getColumnValueSql (id));
 	fields.push_back (StdString ("name"));
 	fields.push_back (Database::getColumnValueSql (name));
-	fields.push_back (StdString ("mediaIds"));
-	fields.push_back (Database::getColumnValueSql (mediaids.toJsonString ()));
-	fields.push_back (StdString ("startTimestamps"));
-	fields.push_back (Database::getColumnValueSql (starttimestamps.toJsonString ()));
 	fields.push_back (StdString ("isExpanded"));
 	fields.push_back (Database::getColumnValueSql (isExpanded));
 	fields.push_back (StdString ("isShuffle"));
@@ -196,10 +231,10 @@ StdString MediaPlaylist::getUpsertSql () const {
 	fields.push_back (Database::getColumnValueSql (startPosition));
 	fields.push_back (StdString ("playDuration"));
 	fields.push_back (Database::getColumnValueSql (playDuration));
-	sql.assign ("INSERT INTO ");
-	sql.append (Database::getRowInsertSql (StdString ("MediaPlaylist"), fields));
 
-	for (j = 0; j < 2; ++j) {
+	sql.assign ("INSERT INTO ");
+	sql.append (Database::getRowInsertSql (StdString (tableName), fields));
+	for (i = 0; i < 2; ++i) {
 		fields.erase (fields.begin ());
 	}
 	update = Database::getRowUpdateSql (fields);
@@ -207,38 +242,105 @@ StdString MediaPlaylist::getUpsertSql () const {
 	sql.append (" ON CONFLICT(id) DO UPDATE SET ");
 	sql.append (update);
 	sql.append (";");
+	destList->push_back (sql);
+
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append ("Item WHERE playlistId=");
+	sql.append (Database::getColumnValueSql (id));
+	sql.append (";");
+	destList->push_back (sql);
+	sortkey = 1;
+	i1 = items.cbegin ();
+	i2 = items.cend ();
+	while (i1 != i2) {
+		fields.clear ();
+		fields.push_back (StdString ("id"));
+		fields.push_back (Database::getColumnValueSql (i1->id));
+		fields.push_back (StdString ("playlistId"));
+		fields.push_back (Database::getColumnValueSql (id));
+		fields.push_back (StdString ("sortKey"));
+		fields.push_back (Database::getColumnValueSql (sortkey));
+		fields.push_back (StdString ("name"));
+		fields.push_back (Database::getColumnValueSql (i1->name));
+		fields.push_back (StdString ("mediaPath"));
+		fields.push_back (Database::getColumnValueSql (i1->mediaPath));
+		fields.push_back (StdString ("duration"));
+		fields.push_back (Database::getColumnValueSql (i1->duration));
+		fields.push_back (StdString ("isVideo"));
+		fields.push_back (Database::getColumnValueSql (i1->isVideo));
+		fields.push_back (StdString ("isAudio"));
+		fields.push_back (Database::getColumnValueSql (i1->isAudio));
+		fields.push_back (StdString ("hasAudioAlbumArt"));
+		fields.push_back (Database::getColumnValueSql (i1->hasAudioAlbumArt));
+		fields.push_back (StdString ("width"));
+		fields.push_back (Database::getColumnValueSql (i1->width));
+		fields.push_back (StdString ("height"));
+		fields.push_back (Database::getColumnValueSql (i1->height));
+		fields.push_back (StdString ("playSeekTimestamp"));
+		fields.push_back (Database::getColumnValueSql (i1->playSeekTimestamp));
+		sql.assign ("INSERT INTO ");
+		sql.append (Database::getRowInsertSql (StdString::createSprintf ("%sItem", tableName), fields));
+		sql.append (";");
+		destList->push_back (sql);
+		++sortkey;
+		++i1;
+	}
+}
+
+void MediaPlaylist::getDeleteSql (const char *tableName, StringList *destList) const {
+	StdString sql;
+
+	destList->clear ();
+	if (id.empty ()) {
+		return;
+	}
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (" WHERE id=");
+	sql.append (Database::getColumnValueSql (id));
+	sql.append (";");
+	destList->push_back (sql);
+
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append ("Item WHERE playlistId=");
+	sql.append (Database::getColumnValueSql (id));
+	sql.append (";");
+	destList->push_back (sql);
+}
+
+StdString MediaPlaylist::getCreateTableSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("(id TEXT PRIMARY KEY, name TEXT, isExpanded INTEGER, isShuffle INTEGER, startPosition INTEGER, playDuration INTEGER);");
+
+	sql.append ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("Item(id TEXT PRIMARY KEY, playlistId TEXT, sortKey INTEGER, name TEXT, mediaPath TEXT, duration INTEGER, isVideo INTEGER, isAudio INTEGER, hasAudioAlbumArt INTEGER, width INTEGER, height INTEGER, playSeekTimestamp INTEGER);");
+
+	sql.append ("CREATE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("PlaylistId ON ");
+	sql.append (tableName);
+	sql.append ("Item(playlistId);");
+
 	return (sql);
 }
 
-StdString MediaPlaylist::getDeleteAllSql () {
-	return (StdString ("DELETE FROM MediaPlaylist;"));
-}
-
-StdString MediaPlaylist::getDeleteExcludeSql (const std::list<MediaPlaylist> &excludeList) {
+StdString MediaPlaylist::getDeleteAllSql (const char *tableName) {
 	StdString sql;
-	std::list<MediaPlaylist>::const_iterator i1, i2;
-	bool first;
 
-	if (excludeList.empty ()) {
-		return (MediaPlaylist::getDeleteAllSql ());
-	}
-	first = true;
-	sql.assign ("DELETE FROM MediaPlaylist WHERE (");
-	i1 = excludeList.cbegin ();
-	i2 = excludeList.cend ();
-	while (i1 != i2) {
-		if (first) {
-			first = false;
-		}
-		else {
-			sql.append (" AND ");
-		}
-		sql.append ("(id != ");
-		sql.append (Database::getColumnValueSql (i1->id));
-		sql.append (")");
-		++i1;
-	}
-	sql.append (");");
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (";");
+
+	sql.append ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append ("Item;");
+
 	return (sql);
 }
 
@@ -323,13 +425,50 @@ void MediaPlaylist::getPlayDurationRange (int64_t *minPlayDuration, int64_t *max
 }
 
 MediaPlaylistItem::MediaPlaylistItem ()
-: startTimestamp (0)
+: duration (0)
+, isVideo (false)
+, isAudio (false)
+, hasAudioAlbumArt (false)
+, width (0)
+, height (0)
+, playSeekTimestamp (0)
 {
 }
-MediaPlaylistItem::MediaPlaylistItem (const StdString &mediaId, int64_t startTimestamp)
-: mediaId (mediaId)
-, startTimestamp (startTimestamp)
+MediaPlaylistItem::MediaPlaylistItem (const MediaPlaylistItem &mediaPlaylistItem)
+: MediaPlaylistItem ()
 {
+	id.assign (mediaPlaylistItem.id);
+	name.assign (mediaPlaylistItem.name);
+	mediaPath.assign (mediaPlaylistItem.mediaPath);
+	duration = mediaPlaylistItem.duration;
+	isVideo = mediaPlaylistItem.isVideo;
+	isAudio = mediaPlaylistItem.isAudio;
+	hasAudioAlbumArt = mediaPlaylistItem.hasAudioAlbumArt;
+	width = mediaPlaylistItem.width;
+	height = mediaPlaylistItem.height;
+	playSeekTimestamp = mediaPlaylistItem.playSeekTimestamp;
+}
+MediaPlaylistItem::MediaPlaylistItem (const MediaItem &mediaItem)
+: MediaPlaylistItem ()
+{
+	readMediaItem (mediaItem);
 }
 MediaPlaylistItem::~MediaPlaylistItem () {
+}
+
+void MediaPlaylistItem::readMediaItem (const MediaItem &mediaItem) {
+	id.assign (mediaItem.id);
+	name.assign (mediaItem.name);
+	mediaPath.assign (mediaItem.mediaPath);
+	duration = mediaItem.duration;
+	isVideo = mediaItem.isVideo;
+	isAudio = mediaItem.isAudio;
+	hasAudioAlbumArt = mediaItem.hasAudioAlbumArt;
+	width = mediaItem.width;
+	height = mediaItem.height;
+	playSeekTimestamp = mediaItem.playSeekTimestamp;
+}
+
+void MediaPlaylistItem::resetId () {
+	id = RecordStore::instance->getRecordId (MediaPlaylist::idCommandType);
 }

@@ -36,11 +36,11 @@
 #include "ClassId.h"
 #include "OsUtil.h"
 #include "Log.h"
+#include "PrefsKey.h"
 #include "MediaUtil.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
 #include "TaskGroup.h"
-#include "Input.h"
 #include "AppUrl.h"
 #include "Font.h"
 #include "Button.h"
@@ -57,7 +57,9 @@
 #include "UiText.h"
 #include "PlayerControl.h"
 #include "SoundMixer.h"
+#include "MediaItem.h"
 #include "MediaControl.h"
+#include "MediaSearchGroup.h"
 #include "ActionWindow.h"
 #include "HelpWindow.h"
 #include "Label.h"
@@ -67,29 +69,34 @@
 #include "TextFieldWindow.h"
 #include "TextCardWindow.h"
 #include "AppCardWindow.h"
-#include "MediaControlWindow.h"
+#include "MediaOptionWindow.h"
+#include "MediaFilescanWindow.h"
 #include "MediaPlaylist.h"
 #include "MediaPlaylistWindow.h"
-#include "MediaControlSearch.h"
 #include "MediaItemImageWindow.h"
 #include "MediaItemDetailWindow.h"
 #include "TagActionWindow.h"
+#include "PlayFileActionWindow.h"
 #include "PlayerWindow.h"
 #include "MediaItemUi.h"
 #include "MediaPlaylistUi.h"
 #include "PlayerUi.h"
 
-constexpr const int UnexpandedMediaControlRow = 0;
-constexpr const int ExpandedMediaControlRow = 1;
-constexpr const int PlaylistToggleRow = 2;
+constexpr const int UnexpandedControlRow = 0;
+constexpr const int ExpandedControlRow = 1;
+constexpr const int PlaylistHeaderRow = 2;
 constexpr const int UnexpandedPlaylistRow = 3;
 constexpr const int ExpandedPlaylistRow = 4;
 constexpr const int AudioDisabledAlertRow = 5;
-constexpr const int EmptyMediaRow = 6;
-constexpr const int MediaItemImageRow = 7;
-constexpr const int MediaItemDetailRow = 8;
-constexpr const int MediaLoadingRow = 9;
-constexpr const int RowCount = 10;
+constexpr const int PlayHistoryHeaderRow = 6;
+constexpr const int PlayHistoryImageRow = 7;
+constexpr const int PlayHistoryDetailRow = 8;
+constexpr const int MediaFilescanHeaderRow = 9;
+constexpr const int MediaFilescanImageRow = 10;
+constexpr const int MediaFilescanDetailRow = 11;
+constexpr const int MediaFilescanEmptyCardRow = 12;
+constexpr const int LoadingIconRow = 13;
+constexpr const int RowCount = 14;
 
 constexpr const int ImageGridWindowMode = 0;
 constexpr const int DetailLineWindowMode = 1;
@@ -98,10 +105,10 @@ constexpr const int EmptyMediaState = 0;
 constexpr const int EmptySearchResultState = 1;
 
 constexpr const SDL_Keycode selectAllKeycode = SDLK_a;
+constexpr const SDL_Keycode fileMediaOpenKeycode = SDLK_o;
 constexpr const double textTruncateWidthScale = 0.25f;
 constexpr const double searchFieldWidthScale = 0.27f;
 constexpr const double bottomPaddingHeightScale = 0.5f;
-constexpr const char *playlistQueueId = "PlayerUiPlaylist";
 
 PlayerUi::PlayerUi ()
 : Ui ()
@@ -109,58 +116,39 @@ PlayerUi::PlayerUi ()
 , searchPanelHandle (&searchPanel)
 , searchFieldHandle (&searchField)
 , searchStatusIconHandle (&searchStatusIcon)
-, mediaControlWindowHandle (&mediaControlWindow)
+, mediaOptionWindowHandle (&mediaOptionWindow)
+, mediaFilescanWindowHandle (&mediaFilescanWindow)
 , emptyStateWindowHandle (&emptyStateWindow)
 , loadingIconWindowHandle (&loadingIconWindow)
 , targetMediaItemWindowHandle (&targetMediaItemWindow)
 , lastSelectedMediaItemWindowHandle (&lastSelectedMediaItemWindow)
 , playlistHeaderPanelHandle (&playlistHeaderPanel)
+, playHistoryHeaderPanelHandle (&playHistoryHeaderPanel)
+, playHistoryCountLabelHandle (&playHistoryCountLabel)
+, mediaFilescanHeaderPanelHandle (&mediaFilescanHeaderPanel)
 , expandPlaylistsToggleHandle (&expandPlaylistsToggle)
 , createPlaylistButtonHandle (&createPlaylistButton)
+, fileMediaOpenButtonHandle (&fileMediaOpenButton)
+, playFileActionWindowHandle (&playFileActionWindow)
 , audioDisabledAlertWindowHandle (&audioDisabledAlertWindow)
 , emptyStateType (-1)
 , mediaWindowMode (-1)
 , mediaSortOrder (-1)
 , mediaDisplayCount (0)
 , mediaAvailableCount (0)
-, isShowingPlaylists (false)
-, isLoadingPlaylists (false)
-, isLoadPlaylistsComplete (false)
-, shouldWritePlaylists (false)
-, isWritingPlaylists (false)
-, isWritePlaylistsComplete (false)
 , isLoadingMedia (false)
 , mediaSearchUpdateTime (0)
-, lastRecordSyncTime (0)
 , searchRecordSyncClock (-1)
+, isLoadMediaPlaylistsComplete (false)
+, mediaItemUiPlayTimestamp (0)
+, isSearchSyncRecordWaiting (false)
 {
 	classId = ClassId::PlayerUi;
-	SdlUtil::createMutex (&mediaPlaylistMutex);
-	SdlUtil::createMutex (&mediaSearchMutex);
+	spritePrefix.assign (SpriteId::PlayerUi_prefix);
+	SdlUtil::createMutex (&syncRecordMutex);
 }
-
 PlayerUi::~PlayerUi () {
-	clearSearch ();
-	SdlUtil::destroyMutex (&mediaPlaylistMutex);
-	SdlUtil::destroyMutex (&mediaSearchMutex);
-}
-
-void PlayerUi::clearSearch () {
-	std::list<MediaSearch *>::iterator i1, i2;
-
-	SDL_LockMutex (mediaSearchMutex);
-	i1 = mediaSearchList.begin ();
-	i2 = mediaSearchList.end ();
-	while (i1 != i2) {
-		(*i1)->release ();
-		++i1;
-	}
-	mediaSearchList.clear ();
-	SDL_UnlockMutex (mediaSearchMutex);
-}
-
-StdString PlayerUi::getSpritePath () {
-	return (StdString ("ui/PlayerUi/sprite"));
+	SdlUtil::destroyMutex (&syncRecordMutex);
 }
 
 Widget *PlayerUi::createBreadcrumbWidget () {
@@ -169,34 +157,37 @@ Widget *PlayerUi::createBreadcrumbWidget () {
 
 OpResult PlayerUi::doLoad () {
 	HashMap *prefs;
-	MediaControlSearch *search;
 	int imagesize, soundmixvolume, visualizertype;
-	bool mediacontrolexpanded, appcardexpanded, shownews, soundmuted, subtitleenabled;
+	bool appcardexpanded, optionwindowexpanded, shownews, soundmuted, subtitleenabled, skipprime;
 
 	mediaDisplayCount = 0;
 	mediaAvailableCount = 0;
-	searchMediaItemIds.clear ();
+	searchSyncRecordIds.clear ();
+	playHistorySyncRecordIds.clear ();
 	isLoadingMedia = false;
 	emptyStateType = -1;
 
 	prefs = App::instance->lockPrefs ();
-	mediaWindowMode = prefs->find (PlayerUi::windowModeKey, ImageGridWindowMode);
-	mediaSortOrder = prefs->find (PlayerUi::sortOrderKey, (int) SystemInterface::Constant_NameSort);
-	soundmixvolume = prefs->find (PlayerUi::soundMixVolumeKey, SoundMixer::maxMixVolume);
-	soundmuted = prefs->find (PlayerUi::soundMutedKey, false);
-	visualizertype = prefs->find (PlayerUi::visualizerTypeKey, PlayerWindow::NoVisualizer);
-	subtitleenabled = prefs->find (PlayerUi::subtitleEnabledKey, true);
-	imagesize = prefs->find (PlayerUi::imageSizeKey, (int) Ui::MediumSize);
-	mediacontrolexpanded = prefs->find (PlayerUi::mediaControlWindowExpandedKey, false);
-	appcardexpanded = prefs->find (PlayerUi::appCardExpandedKey, false);
-	isShowingPlaylists = prefs->find (PlayerUi::showPlaylistsKey, false);
-	shownews = prefs->find (PlayerUi::showAppNewsKey, false);
+	mediaWindowMode = prefs->find (PrefsKey::playerUiWindowMode, ImageGridWindowMode);
+	mediaSortOrder = prefs->find (PrefsKey::playerUiSortOrder, (int) SystemInterface::Constant_NameSort);
+	soundmixvolume = prefs->find (PrefsKey::soundMixVolume, SoundMixer::maxMixVolume);
+	soundmuted = prefs->find (PrefsKey::soundMuted, false);
+	visualizertype = prefs->find (PrefsKey::visualizerType, PlayerWindow::NoVisualizer);
+	subtitleenabled = prefs->find (PrefsKey::subtitleEnabled, true);
+	imagesize = prefs->find (PrefsKey::playerUiImageSize, (int) Ui::MediumSize);
+	appcardexpanded = prefs->find (PrefsKey::appCardExpanded, false);
+	optionwindowexpanded = prefs->find (PrefsKey::mediaOptionWindowExpanded, false);
+	playerUiOptions.showPlayHistory = prefs->find (PrefsKey::showPlayHistory, true);
+	playerUiOptions.showPlaylists = prefs->find (PrefsKey::showPlaylists, true);
+	shownews = prefs->find (PrefsKey::showAppNews, false);
+	skipprime = prefs->find (PrefsKey::skipPrimePanel, false);
 	App::instance->unlockPrefs ();
-	if (! MediaControl::instance->isConfigured) {
-		mediacontrolexpanded = true;
-		appcardexpanded = false;
+	if (! skipprime) {
+		appcardexpanded = true;
+		optionwindowexpanded = true;
 		shownews = false;
 	}
+
 	UiStack::instance->setPlayerControlOptions (soundmixvolume, soundmuted, visualizertype, subtitleenabled);
 
 	setDetailImageSize (imagesize);
@@ -204,72 +195,93 @@ OpResult PlayerUi::doLoad () {
 
 	cardView->setRowReverseSorted (ExpandedPlaylistRow, true);
 
-	cardView->setRowHeader (EmptyMediaRow, createRowHeaderPanel (UiText::instance->getText (UiTextId::Media).capitalized ()));
-	cardView->setRowHeader (MediaItemImageRow, createRowHeaderPanel (UiText::instance->getText (UiTextId::Media).capitalized ()));
-	cardView->setRowHeader (MediaItemDetailRow, createRowHeaderPanel (UiText::instance->getText (UiTextId::Media).capitalized ()));
-	cardView->setRowHeader (MediaLoadingRow, createRowHeaderPanel (UiText::instance->getText (UiTextId::Media).capitalized ()));
-	cardView->setRowItemMarginSize (MediaItemImageRow, 0.0f);
-	cardView->setRowSelectionAnimated (MediaItemImageRow, true);
-	cardView->setRowItemMarginSize (MediaItemDetailRow, UiConfiguration::instance->marginSize / 2.0f);
-	cardView->setRowLabeled (MediaItemImageRow, true, PlayerUi::mediaItemWindowCardViewItemLabel, this);
-	cardView->setRowItemMarginSize (MediaLoadingRow, UiConfiguration::instance->marginSize);
+	cardView->setRowReverseSorted (PlayHistoryImageRow, true);
+	cardView->setRowItemMarginSize (PlayHistoryImageRow, 0.0f);
+	cardView->setRowSelectionAnimated (PlayHistoryImageRow, true);
+	cardView->setRowRepositionAnimated (PlayHistoryImageRow, true);
+	cardView->setRowLabeled (PlayHistoryImageRow, true, PlayerUi::mediaItemWindowCardViewItemLabel, this);
+	cardView->setRowReverseSorted (PlayHistoryDetailRow, true);
+	cardView->setRowItemMarginSize (PlayHistoryDetailRow, UiConfiguration::instance->marginSize / 2.0f);
+	cardView->setRowRepositionAnimated (PlayHistoryDetailRow, true);
+
+	cardView->setRowItemMarginSize (MediaFilescanImageRow, 0.0f);
+	cardView->setRowSelectionAnimated (MediaFilescanImageRow, true);
+	cardView->setRowLabeled (MediaFilescanImageRow, true, PlayerUi::mediaItemWindowCardViewItemLabel, this);
+	cardView->setRowItemMarginSize (MediaFilescanDetailRow, UiConfiguration::instance->marginSize / 2.0f);
+
+	cardView->setRowItemMarginSize (LoadingIconRow, UiConfiguration::instance->marginSize);
+
 	cardView->setBottomPadding (App::instance->drawableHeight * bottomPaddingHeightScale);
 
-	mediaControlWindowHandle.assign (new MediaControlWindow ());
-	mediaControlWindow->expandStateChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaControlWindowExpandStateChanged, this);
-	mediaControlWindow->layoutChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaControlWindowLayoutChanged, this);
-	mediaControlWindow->itemId = cardView->getAvailableItemId ();
-	mediaControlWindow->sortKey.assign ("a");
-	mediaControlWindow->setExpanded (mediacontrolexpanded, true);
-	cardView->addItem (mediaControlWindow, mediaControlWindow->itemId, mediaControlWindow->isExpanded ? ExpandedMediaControlRow : UnexpandedMediaControlRow);
-
-	appCardHandle.assign (new AppCardWindow ());
+	appCardHandle.assign (new AppCardWindow (&sprites, ! skipprime));
+	appCard->widgetName.assign ("appInfoWindow");
 	appCard->itemId = cardView->getAvailableItemId ();
-	appCard->sortKey.assign ("b");
+	appCard->sortKey.assign ("a");
 	appCard->expandStateChangeCallback = Widget::EventCallbackContext (PlayerUi::appCardExpandStateChanged, this);
 	appCard->layoutChangeCallback = Widget::EventCallbackContext (PlayerUi::appCardLayoutChanged, this);
 	appCard->setExpanded (appcardexpanded, true);
 	appCard->initialize (shownews, App::instance->isStartUpdateEnabled);
-	cardView->addItem (appCard, appCard->itemId, appCard->isExpanded ? ExpandedMediaControlRow : UnexpandedMediaControlRow);
+	cardView->addItem (appCard, appCard->itemId, appCard->isExpanded ? ExpandedControlRow : UnexpandedControlRow);
 
-	search = new MediaControlSearch ();
-	search->addRecordsCallback = MediaSearch::EventCallbackContext (PlayerUi::mediaSearchRecordsAdded, this);
-	search->removeRecordsCallback = MediaSearch::EventCallbackContext (PlayerUi::mediaSearchRecordsRemoved, this);
-	search->resetSearch (StdString (), mediaSortOrder);
-	search->retain ();
-	SDL_LockMutex (mediaSearchMutex);
-	mediaSearchList.push_back (search);
-	SDL_UnlockMutex (mediaSearchMutex);
+	mediaOptionWindowHandle.assign (new MediaOptionWindow (&sprites, playerUiOptions));
+	mediaOptionWindow->widgetName.assign ("mediaOptionWindow");
+	mediaOptionWindow->expandStateChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaOptionWindowExpandStateChanged, this);
+	mediaOptionWindow->layoutChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaOptionWindowLayoutChanged, this);
+	mediaOptionWindow->configureCallback = Widget::EventCallbackContext (PlayerUi::mediaOptionWindowConfigured, this);
+	mediaOptionWindow->itemId = cardView->getAvailableItemId ();
+	mediaOptionWindow->sortKey.assign ("b");
+	mediaOptionWindow->setExpanded (optionwindowexpanded, true);
+	cardView->addItem (mediaOptionWindow, mediaOptionWindow->itemId, mediaOptionWindow->isExpanded ? ExpandedControlRow : UnexpandedControlRow);
 
+	App::instance->setUiActive ();
 	retain ();
 	App::instance->addUpdateTask (PlayerUi::awaitMediaControlReady, this);
-
 	return (OpResult::Success);
 }
 
 void PlayerUi::doUnload () {
-	clearSearch ();
+	MediaSearchGroup::instance->removeListener (this);
+	MediaSearchGroup::instance->configureMediaControlSearch (false);
+
 	appCardHandle.clear ();
 	searchPanelHandle.clear ();
 	searchFieldHandle.clear ();
 	searchStatusIconHandle.clear ();
 	emptyStateWindowHandle.clear ();
 	playlistHeaderPanelHandle.clear ();
+	playHistoryHeaderPanelHandle.clear ();
+	playHistoryCountLabelHandle.clear ();
+	mediaFilescanHeaderPanelHandle.clear ();
 	expandPlaylistsToggleHandle.clear ();
 	createPlaylistButtonHandle.clear ();
-	mediaControlWindowHandle.clear ();
+	fileMediaOpenButtonHandle.clear ();
+	playFileActionWindowHandle.clear ();
+	mediaOptionWindowHandle.clear ();
+	mediaFilescanWindowHandle.clear ();
 	loadingIconWindowHandle.clear ();
 	targetMediaItemWindowHandle.clear ();
 	lastSelectedMediaItemWindowHandle.clear ();
 	selectedMediaMap.clear ();
 	audioDisabledAlertWindowHandle.clear ();
 
+	playHistoryRecordIds.clear ();
+	RecordStore::instance->remove (mediaOpenRecordIds);
+	mediaOpenRecordIds.clear ();
 	RecordStore::instance->remove (loadedRecordIds);
 	loadedRecordIds.clear ();
 }
 
 void PlayerUi::doAddMainToolbarItems (Toolbar *toolbar) {
+	Button *button;
+
 	toolbar->addRightItem (createImageSizeButton ());
+
+	button = new Button (sprites.getSprite (SpriteId::PlayerUi_navigateButton));
+	button->widgetName.assign ("mainToolbarViewTargetButton");
+	button->mouseClickCallback = Widget::EventCallbackContext (PlayerUi::navigateButtonClicked, this);
+	button->setInverseColor (true);
+	button->setMouseHoverTooltip (UiText::instance->getText (UiTextId::PlayerUiNavigateTooltip));
+	toolbar->addRightItem (button);
 }
 
 void PlayerUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
@@ -291,7 +303,7 @@ void PlayerUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 	searchStatusIcon->widgetName.assign ("searchStatus");
 	searchStatusIcon->setPaddingScale (1.0f, 0.0f);
 	searchStatusIcon->setIconImageColor (UiConfiguration::instance->inverseTextColor);
-	searchStatusIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::SearchEmptyResultTooltip));
+	searchStatusIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::SearchStatusIconTooltip));
 	searchPanel->add (searchStatusIcon);
 
 	searchPanel->setFixedPadding (true, 0.0f, 0.0f);
@@ -304,12 +316,15 @@ void PlayerUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 	toolbar->addRightItem (createToolPopupButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_pauseButton), PlayerUi::pauseButtonClicked, PlayerUi::pauseButtonFocused, UiText::instance->getText (UiTextId::PlayerUiPauseTooltip).capitalized (), "pauseButton", SDLK_F2));
 	toolbar->addRightItem (createToolPopupButton (sprites.getSprite (SpriteId::PlayerUi_stopButton), PlayerUi::stopButtonClicked, PlayerUi::stopButtonFocused, UiText::instance->getText (UiTextId::PlayerUiStopTooltip).capitalized (), "stopButton", SDLK_F1));
 
+	toolbar->addRightItem (createToolPopupButton (sprites.getSprite (SpriteId::PlayerUi_tagButton), PlayerUi::tagButtonClicked, PlayerUi::tagButtonFocused, UiText::instance->getText (UiTextId::PlayerUiTagActionTooltip), "tagButton"));
+
 	button = createToolPopupButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_starHalfButton), PlayerUi::selectAllButtonClicked, PlayerUi::selectAllButtonFocused, UiText::instance->getText (UiTextId::SelectAllTooltip), "selectAllButton");
 	button->shortcutKey = selectAllKeycode;
 	button->isShortcutKeyControlPress = true;
 	toolbar->addRightItem (button);
 
-	toolbar->addRightItem (createToolPopupButton (sprites.getSprite (SpriteId::PlayerUi_tagButton), PlayerUi::tagButtonClicked, PlayerUi::tagButtonFocused, UiText::instance->getText (UiTextId::PlayerUiTagMenuTooltip), "tagButton"));
+	fileMediaOpenButtonHandle.destroyAndAssign (Ui::createToolbarIconButton (sprites.getSprite (SpriteId::PlayerUi_playMediaButton), Widget::EventCallbackContext (PlayerUi::fileMediaOpenButtonClicked, this), UiText::instance->getText (UiTextId::PlayerUiPlayFileTooltip), "fileMediaOpenButton"));
+	toolbar->addRightItem (fileMediaOpenButton);
 }
 
 void PlayerUi::doResume () {
@@ -327,34 +342,58 @@ void PlayerUi::doPause () {
 
 	UiStack::instance->getPlayerControlOptions (&soundmixvolume, &soundmuted, &visualizertype, &subtitleenabled);
 	prefs = App::instance->lockPrefs ();
-	if (mediaControlWindow) {
-		prefs->insert (PlayerUi::mediaControlWindowExpandedKey, mediaControlWindow->isExpanded, false);
+	if (mediaOptionWindow) {
+		prefs->insert (PrefsKey::mediaOptionWindowExpanded, mediaOptionWindow->isExpanded, false);
+	}
+	if (mediaFilescanWindow) {
+		prefs->insert (PrefsKey::mediaFilescanWindowExpanded, mediaFilescanWindow->isExpanded, false);
 	}
 	if (appCard) {
-		prefs->insert (PlayerUi::appCardExpandedKey, appCard->isExpanded, false);
+		prefs->insert (PrefsKey::appCardExpanded, appCard->isExpanded, false);
 	}
-	prefs->insert (PlayerUi::imageSizeKey, detailImageSize, (int) Ui::MediumSize);
-	prefs->insert (PlayerUi::sortOrderKey, mediaSortOrder, (int) SystemInterface::Constant_NameSort);
-	prefs->insert (PlayerUi::windowModeKey, mediaWindowMode, ImageGridWindowMode);
-	prefs->insert (PlayerUi::soundMixVolumeKey, soundmixvolume, SoundMixer::maxMixVolume);
-	prefs->insert (PlayerUi::soundMutedKey, soundmuted, false);
-	prefs->insert (PlayerUi::visualizerTypeKey, visualizertype, PlayerWindow::NoVisualizer);
-	prefs->insert (PlayerUi::subtitleEnabledKey, subtitleenabled, true);
-	prefs->insert (PlayerUi::showPlaylistsKey, isShowingPlaylists, false);
+	prefs->insert (PrefsKey::playerUiImageSize, detailImageSize, (int) Ui::MediumSize);
+	prefs->insert (PrefsKey::playerUiSortOrder, mediaSortOrder, (int) SystemInterface::Constant_NameSort);
+	prefs->insert (PrefsKey::playerUiWindowMode, mediaWindowMode, ImageGridWindowMode);
+	prefs->insert (PrefsKey::soundMixVolume, soundmixvolume, SoundMixer::maxMixVolume);
+	prefs->insert (PrefsKey::soundMuted, soundmuted, false);
+	prefs->insert (PrefsKey::visualizerType, visualizertype, PlayerWindow::NoVisualizer);
+	prefs->insert (PrefsKey::subtitleEnabled, subtitleenabled, true);
+	prefs->insert (PrefsKey::showPlayHistory, playerUiOptions.showPlayHistory, true);
+	prefs->insert (PrefsKey::showPlaylists, playerUiOptions.showPlaylists, true);
 	App::instance->unlockPrefs ();
 }
 
 void PlayerUi::doUpdate (int msElapsed) {
 	emptyStateWindowHandle.compact ();
 	playlistHeaderPanelHandle.compact ();
+	playHistoryHeaderPanelHandle.compact ();
+	playHistoryCountLabelHandle.compact ();
+	mediaFilescanHeaderPanelHandle.compact ();
 	expandPlaylistsToggleHandle.compact ();
 	createPlaylistButtonHandle.compact ();
+	fileMediaOpenButtonHandle.compact ();
+	playFileActionWindowHandle.compact ();
 	loadingIconWindowHandle.compact ();
 	targetMediaItemWindowHandle.compact ();
 	lastSelectedMediaItemWindowHandle.compact ();
 	audioDisabledAlertWindowHandle.compact ();
-	updatePlaylists ();
 	updateSearch (msElapsed);
+}
+
+void PlayerUi::doResize () {
+	cardView->processItems (PlayerUi::doResize_processItems, this, true);
+	if (searchField) {
+		searchField->setWindowWidth (App::instance->drawableWidth * searchFieldWidthScale);
+	}
+}
+void PlayerUi::doResize_processItems (void *itPtr, Widget *itemWidget) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+	MediaItemWindow *mediaitem;
+
+	mediaitem = MediaItemWindow::castWidget (itemWidget);
+	if (mediaitem) {
+		mediaitem->setDetailSize (it->detailImageSize, it->cardView->cardAreaWidth / CardView::reducedSizeItemScale);
+	}
 }
 
 void PlayerUi::awaitMediaControlReady (void *itPtr) {
@@ -373,19 +412,298 @@ void PlayerUi::awaitMediaControlReady (void *itPtr) {
 		it->searchKey.assign (StdString ());
 		it->resetSearch ();
 	}
+	MediaSearchGroup::instance->addListener (it, PlayerUi::mediaSearchRecordsAdded, PlayerUi::mediaSearchRecordsRemoved);
+	MediaSearchGroup::instance->configureMediaControlSearch (true);
+	MediaSearchGroup::instance->resetSearch (it->searchKey, it->mediaSortOrder);
+
+	if (MediaControl::instance->mainOptions.savePlayHistory) {
+		MediaControl::instance->getPlayHistoryRecordIds (&(it->playHistoryRecordIds));
+		if (it->playerUiOptions.showPlayHistory) {
+			if (! it->playHistoryRecordIds.empty ()) {
+				SDL_LockMutex (it->syncRecordMutex);
+				it->playHistorySyncRecordIds.append (it->playHistoryRecordIds);
+				SDL_UnlockMutex (it->syncRecordMutex);
+				App::instance->shouldSyncRecordStore = true;
+			}
+			it->resetPlayHistoryCount ();
+		}
+	}
+	MediaControl::instance->addPlayHistoryListener (it, PlayerUi::mediaControlPlayHistoryRecordAdded, PlayerUi::mediaControlPlayHistoryRecordRemoved);
+
+	if (MediaControl::instance->mainOptions.savePlaylists && it->playerUiOptions.showPlaylists) {
+		it->isLoadMediaPlaylistsComplete = false;
+		it->retain ();
+		TaskGroup::instance->run (TaskGroup::RunContext (PlayerUi::loadMediaPlaylists, it, App::databaseWriteQueueId));
+
+		App::instance->setUiActive ();
+		it->retain ();
+		App::instance->addUpdateTask (PlayerUi::awaitLoadMediaPlaylistsComplete, it);
+	}
+
+	App::instance->unsetUiActive ();
+	it->resetMediaOptionRows ();
 	it->release ();
 }
 
-void PlayerUi::updatePlaylists () {
-	StdString id;
-	Panel *panel;
-	std::list<MediaPlaylist>::const_iterator i1, i2;
-	MediaPlaylistWindow *playlist;
-	std::list<MediaPlaylistWindow *> playlistwindows;
-	std::list<MediaPlaylistWindow *>::const_iterator j1, j2;
-	int64_t now;
+void PlayerUi::navigateButtonClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+	Menu *menu;
 
-	if (isShowingPlaylists) {
+	UiStack::instance->suspendMouseHover ();
+	if (it->clearActionPopup (widgetPtr, PlayerUi::navigateButtonClicked)) {
+		return;
+	}
+	menu = new Menu ();
+	menu->isClickDestroyEnabled = true;
+	menu->addItem (UiText::instance->getText (UiTextId::MediaOptions).capitalized (), it->sprites.getSprite (SpriteId::PlayerUi_smallMediaOptionIcon), Widget::EventCallbackContext (PlayerUi::navigateMediaOptionsClicked, it));
+	if (it->playerUiOptions.showPlaylists && MediaControl::instance->mainOptions.savePlaylists && it->playlistHeaderPanel) {
+		menu->addItem (UiText::instance->getText (UiTextId::Playlists).capitalized (), SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallPlaylistIcon), Widget::EventCallbackContext (PlayerUi::navigatePlaylistsClicked, it));
+	}
+	if (it->playerUiOptions.showPlayHistory && it->playHistoryHeaderPanel) {
+		menu->addItem (UiText::instance->getText (UiTextId::PlayedItems).capitalized (), SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallStreamIcon), Widget::EventCallbackContext (PlayerUi::navigatePlayHistoryClicked, it));
+	}
+	if (it->mediaFilescanWindow) {
+		menu->addItem (UiText::instance->getText (UiTextId::MediaScan).capitalized (), SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallComputerIcon), Widget::EventCallbackContext (PlayerUi::navigateMediaScanClicked, it));
+	}
+	it->showActionPopup (menu, widgetPtr, PlayerUi::navigateButtonClicked, widgetPtr->getScreenRect (), Ui::RightEdgeAlignment, Ui::BottomOfAlignment);
+}
+void PlayerUi::navigateMediaOptionsClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (! it->mediaOptionWindow) {
+		return;
+	}
+	if (it->appCard) {
+		it->appCard->setExpanded (false);
+	}
+	if (it->mediaFilescanWindow) {
+		it->mediaFilescanWindow->setExpanded (true);
+	}
+	it->mediaOptionWindow->setExpanded (true);
+	it->cardView->scrollToItem (it->mediaOptionWindow->itemId);
+}
+void PlayerUi::navigatePlaylistsClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (it->playlistHeaderPanel) {
+		it->cardView->scrollToRow (PlaylistHeaderRow);
+	}
+}
+void PlayerUi::navigatePlayHistoryClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (it->playHistoryHeaderPanel) {
+		it->cardView->scrollToRow (PlayHistoryHeaderRow);
+	}
+}
+void PlayerUi::navigateMediaScanClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (it->mediaFilescanHeaderPanel) {
+		it->cardView->scrollToRow (MediaFilescanHeaderRow);
+	}
+}
+
+static void updateSearch_matchLoadWaitingMediaItem (void *boolPtr, Widget *itemWidget) {
+	MediaItemWindow *mediaitem;
+	bool *b;
+
+	b = (bool *) boolPtr;
+	if (*b) {
+		return;
+	}
+	mediaitem = MediaItemWindow::castWidget (itemWidget);
+	if (mediaitem && mediaitem->isLoadWaiting) {
+		*b = true;
+	}
+}
+void PlayerUi::updateSearch (int msElapsed) {
+	MediaSearchGroup::Status status;
+	bool advance, waiting, loading;
+
+	advance = false;
+	SDL_LockMutex (syncRecordMutex);
+	waiting = isSearchSyncRecordWaiting;
+	SDL_UnlockMutex (syncRecordMutex);
+	if (! waiting) {
+		advance = cardView->isScrolledToBottom (App::instance->drawableHeight * bottomPaddingHeightScale);
+	}
+	if (advance) {
+		loading = false;
+		cardView->processItems (updateSearch_matchLoadWaitingMediaItem, &loading);
+		if (loading) {
+			advance = false;
+		}
+	}
+	if (advance) {
+		MediaSearchGroup::instance->advanceSearch ();
+	}
+
+	MediaSearchGroup::instance->getStatus (&status);
+	if (searchStatusIcon && (mediaSearchUpdateTime != status.lastStatusUpdateTime)) {
+		if (status.searchSetSize <= 0) {
+			searchStatusIcon->setText (StdString ("0"));
+			searchStatusIcon->setTextColor (UiConfiguration::instance->inverseTextColor);
+			searchStatusIcon->setIconImageColor (UiConfiguration::instance->inverseTextColor);
+			searchStatusIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::SearchStatusIconTooltip));
+		}
+		else if (status.searchReceiveCount >= status.searchSetSize) {
+			searchStatusIcon->setText (StdString::createSprintf ("%i", status.searchSetSize));
+			searchStatusIcon->setTextColor (UiConfiguration::instance->inverseTextColor);
+			searchStatusIcon->setIconImageColor (UiConfiguration::instance->inverseTextColor);
+			searchStatusIcon->setMouseHoverTooltip (StdString::createSprintf ("%s %s", UiText::instance->getText (UiTextId::SearchStatusIconTooltip).c_str (), UiText::instance->getText (UiTextId::SearchCompleteTooltip).c_str ()));
+		}
+		else {
+			searchStatusIcon->setText (StdString::createSprintf ("%i / %i", status.searchReceiveCount, status.searchSetSize));
+			searchStatusIcon->setTextColor (UiConfiguration::instance->mediumSecondaryColor);
+			searchStatusIcon->setIconImageColor (UiConfiguration::instance->mediumSecondaryColor);
+			searchStatusIcon->setMouseHoverTooltip (StdString::createSprintf ("%s %s", UiText::instance->getText (UiTextId::SearchStatusIconTooltip).c_str (), UiText::instance->getText (UiTextId::SearchInProgressTooltip).c_str ()));
+		}
+		searchPanel->reflow ();
+		UiStack::instance->secondaryToolbar->reflow ();
+		mediaSearchUpdateTime = status.lastStatusUpdateTime;
+		syncSearchRecords ();
+	}
+	if (status.isLoading) {
+		setLoadingIconVisible (true);
+		if (emptyStateWindow) {
+			cardView->removeItem (emptyStateWindow->itemId);
+			emptyStateWindowHandle.clear ();
+			emptyStateType = -1;
+		}
+	}
+	else {
+		setLoadingIconVisible (false);
+		if (isLoadingMedia) {
+			searchRecordSyncClock = 0;
+		}
+	}
+	isLoadingMedia = status.isLoading;
+	mediaAvailableCount = status.mediaAvailableCount;
+
+	if (searchRecordSyncClock >= 0) {
+		searchRecordSyncClock -= msElapsed;
+		if (searchRecordSyncClock <= 0) {
+			App::instance->shouldSyncRecordStore = true;
+			searchRecordSyncClock = -1;
+		}
+	}
+}
+
+void PlayerUi::mediaOptionWindowExpandStateChanged (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+	MediaOptionWindow *window = (MediaOptionWindow *) widgetPtr;
+
+	window->resetInputState ();
+	it->cardView->animateItemScaleBump (window->itemId);
+	it->clearPopupWidgets ();
+	it->cardView->setItemRow (window->itemId, window->isExpanded ? ExpandedControlRow : UnexpandedControlRow, true);
+	it->cardView->reflow ();
+}
+void PlayerUi::mediaOptionWindowLayoutChanged (void *itPtr, Widget *widgetPtr) {
+	((PlayerUi *) itPtr)->cardView->reflow ();
+}
+void PlayerUi::mediaOptionWindowConfigured (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+	MediaOptionWindow *window = (MediaOptionWindow *) widgetPtr;
+
+	it->clearPopupWidgets ();
+	it->playerUiOptions = window->playerUiOptions;
+	App::instance->showNotification (UiText::instance->getText (UiTextId::MediaOptionConfiguredText));
+	App::instance->setUiActive ();
+	it->retain ();
+	App::instance->addUpdateTask (PlayerUi::awaitMediaControlReady, it);
+}
+
+void PlayerUi::resetMediaOptionRows () {
+	Panel *panel, *sidepanel;
+	Button *button;
+	HashMap *prefs;
+	bool expanded;
+
+	if (! playerUiOptions.showPlayHistory) {
+		if (playHistoryHeaderPanel) {
+			cardView->removeItem (playHistoryHeaderPanel);
+			playHistoryHeaderPanelHandle.destroyAndClear ();
+		}
+		cardView->removeRowItems (PlayHistoryImageRow);
+		cardView->removeRowItems (PlayHistoryDetailRow);
+	}
+	else {
+		if (! playHistoryHeaderPanel) {
+			panel = new Panel ();
+
+			playHistoryCountLabelHandle.destroyAndAssign (new LabelWindow (new Label (StdString (), UiConfiguration::TitleFont, UiConfiguration::instance->inverseTextColor)));
+			playHistoryCountLabel->setFillBg (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->scrimBackgroundAlpha));
+			panel->add (playHistoryCountLabel);
+
+			sidepanel = panel->add (new Panel ());
+			sidepanel->setFillBg (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->scrimBackgroundAlpha));
+			sidepanel->setFixedPadding (true, 0.0f, 0.0f);
+			button = sidepanel->add (new Button (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_deleteButton)));
+			button->widgetName.assign ("clearPlayHistoryButton");
+			button->mouseClickCallback = Widget::EventCallbackContext (PlayerUi::clearPlayHistoryButtonClicked, this);
+			button->setInverseColor (true);
+			button->setMouseHoverTooltip (UiText::instance->getText (UiTextId::PlayerUiClearPlayHistoryTooltip));
+
+			panel->setLayout (Panel::RightFlowLayoutOption);
+			playHistoryHeaderPanelHandle.assign (panel);
+			cardView->addItem (playHistoryHeaderPanel, PlayHistoryHeaderRow);
+			resetPlayHistoryCount ();
+		}
+		SDL_LockMutex (syncRecordMutex);
+		playHistorySyncRecordIds.append (playHistoryRecordIds);
+		SDL_UnlockMutex (syncRecordMutex);
+		App::instance->shouldSyncRecordStore = true;
+	}
+
+	if (! MediaControl::instance->mainOptions.mediaScan) {
+		if (mediaFilescanHeaderPanel) {
+			cardView->removeItem (mediaFilescanHeaderPanel);
+			mediaFilescanHeaderPanelHandle.destroyAndClear ();
+		}
+		if (mediaFilescanWindow) {
+			cardView->removeItem (mediaFilescanWindow->itemId);
+			mediaFilescanWindowHandle.destroyAndClear ();
+		}
+		MediaSearchGroup::instance->configureMediaControlSearch (false);
+	}
+	else {
+		if (! mediaFilescanHeaderPanel) {
+			mediaFilescanHeaderPanelHandle.assign (createRowHeaderPanel (UiText::instance->getText (UiTextId::MediaScan).capitalized ()));
+			cardView->addItem (mediaFilescanHeaderPanel, MediaFilescanHeaderRow);
+		}
+		if (! mediaFilescanWindow) {
+			if (! MediaControl::instance->isFilescanConfigured) {
+				expanded = true;
+			}
+			else {
+				prefs = App::instance->lockPrefs ();
+				expanded = prefs->find (PrefsKey::mediaFilescanWindowExpanded, false);
+				App::instance->unlockPrefs ();
+			}
+
+			mediaFilescanWindowHandle.assign (new MediaFilescanWindow ());
+			mediaFilescanWindow->widgetName.assign ("mediaScanWindow");
+			mediaFilescanWindow->layoutChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaFilescanWindowLayoutChanged, this);
+			mediaFilescanWindow->expandStateChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaFilescanWindowExpandStateChanged, this);
+			mediaFilescanWindow->itemId = cardView->getAvailableItemId ();
+			mediaFilescanWindow->sortKey.assign ("c");
+			mediaFilescanWindow->setExpanded (expanded, true);
+			cardView->addItem (mediaFilescanWindow, mediaFilescanWindow->itemId, mediaFilescanWindow->isExpanded ? ExpandedControlRow : UnexpandedControlRow);
+		}
+	}
+
+	if (!(MediaControl::instance->mainOptions.savePlaylists && playerUiOptions.showPlaylists)) {
+		if (playlistHeaderPanel) {
+			cardView->removeItem (playlistHeaderPanel);
+			playlistHeaderPanelHandle.clear ();
+		}
+		UiStack::instance->stopPlaylists ();
+		cardView->removeRowItems (ExpandedPlaylistRow);
+		cardView->removeRowItems (UnexpandedPlaylistRow);
+	}
+	else {
 		if (! playlistHeaderPanel) {
 			panel = new Panel ();
 			panel->setFillBg (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->scrimBackgroundAlpha));
@@ -405,350 +723,111 @@ void PlayerUi::updatePlaylists () {
 
 			panel->setLayout (Panel::RightFlowLayoutOption);
 			playlistHeaderPanelHandle.assign (createRowHeaderPanel (UiText::instance->getText (UiTextId::Playlists).capitalized (), panel));
-			cardView->addItem (playlistHeaderPanel, PlaylistToggleRow);
-
-			if (! isLoadingPlaylists) {
-				isLoadingPlaylists = true;
-				isLoadPlaylistsComplete = false;
-				retain ();
-				TaskGroup::instance->run (TaskGroup::RunContext (PlayerUi::loadMediaPlaylists, this, playlistQueueId));
-			}
-		}
-
-		if (isLoadingPlaylists) {
-			if (isLoadPlaylistsComplete) {
-				now = OsUtil::getTime ();
-				SDL_LockMutex (mediaPlaylistMutex);
-				i1 = mediaPlaylists.cbegin ();
-				i2 = mediaPlaylists.cend ();
-				while (i1 != i2) {
-					playlist = createMediaPlaylistWindow ();
-					playlist->read (*i1);
-					playlistwindows.push_back (playlist);
-					++i1;
-				}
-				SDL_UnlockMutex (mediaPlaylistMutex);
-
-				j1 = playlistwindows.cbegin ();
-				j2 = playlistwindows.cend ();
-				while (j1 != j2) {
-					playlist = *j1;
-					id = cardView->getAvailableItemId ();
-					playlist->itemId.assign (id);
-					setSortKey (playlist, now);
-					cardView->addItem (playlist, id, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow, true);
-					cardView->animateItemScaleBump (id);
-					++j1;
-				}
-				cardView->reflow ();
-				isLoadingPlaylists = false;
-			}
-		}
-
-		if (createPlaylistButton) {
-			createPlaylistButton->setDisabled (isLoadingPlaylists || (! MediaControl::instance->isReady));
-		}
-	}
-	else {
-		shouldWritePlaylists = false;
-		if (playlistHeaderPanel) {
-			UiStack::instance->stopPlaylists ();
-			cardView->removeRowItems (ExpandedPlaylistRow);
-			cardView->removeRowItems (UnexpandedPlaylistRow);
-
-			id = cardView->findItemId (CardView::matchPointerValue, playlistHeaderPanel);
-			if (! id.empty ()) {
-				cardView->removeItem (id);
-			}
-			playlistHeaderPanelHandle.clear ();
-		}
-	}
-
-	if (shouldWritePlaylists) {
-		isWritingPlaylists = true;
-		isWritePlaylistsComplete = false;
-		retain ();
-		TaskGroup::instance->run (TaskGroup::RunContext (PlayerUi::writeMediaPlaylists, this, playlistQueueId));
-		shouldWritePlaylists = false;
-	}
-	if (isWritingPlaylists) {
-		shouldWritePlaylists = false;
-		if (isWritePlaylistsComplete) {
-			isWritingPlaylists = false;
+			cardView->addItem (playlistHeaderPanel, PlaylistHeaderRow);
 		}
 	}
 }
 
-void PlayerUi::updatePlaylistRecord (const MediaPlaylist &playlist) {
-	std::list<MediaPlaylist>::iterator i1, i2;
-	MediaPlaylist item;
-	bool found;
-
-	found = false;
-	SDL_LockMutex (mediaPlaylistMutex);
-	i1 = mediaPlaylists.begin ();
-	i2 = mediaPlaylists.end ();
-	while (i1 != i2) {
-		if (i1->id.equals (playlist.id)) {
-			i1->copyValues (playlist);
-			found = true;
-			break;
-		}
-		++i1;
-	}
-	if (! found) {
-		item.copyValues (playlist);
-		mediaPlaylists.push_back (item);
-	}
-	mediaPlaylistWriteMap.insert (playlist.id, true);
-	SDL_UnlockMutex (mediaPlaylistMutex);
-	shouldWritePlaylists = true;
-}
-
-void PlayerUi::removePlaylistRecord (const StdString &playlistId) {
-	std::list<MediaPlaylist>::iterator i1, i2;
-	MediaPlaylist item;
-	bool found;
-
-	found = false;
-	SDL_LockMutex (mediaPlaylistMutex);
-	i1 = mediaPlaylists.begin ();
-	i2 = mediaPlaylists.end ();
-	while (i1 != i2) {
-		if (i1->id.equals (playlistId)) {
-			mediaPlaylists.erase (i1);
-			found = true;
-			break;
-		}
-		++i1;
-	}
-	SDL_UnlockMutex (mediaPlaylistMutex);
-	if (found) {
-		shouldWritePlaylists = true;
-	}
-}
-
-void PlayerUi::loadMediaPlaylists (void *itPtr) {
+void PlayerUi::fileMediaOpenButtonClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
-	it->executeLoadMediaPlaylists ();
-	it->isLoadPlaylistsComplete = true;
-	it->release ();
-}
-void PlayerUi::executeLoadMediaPlaylists () {
-	std::list<MediaPlaylist> playlists;
-	StdString errmsg;
-
-	if (! MediaControl::instance->isReady) {
+	if (it->clearActionPopup (widgetPtr, PlayerUi::fileMediaOpenButtonClicked)) {
 		return;
 	}
-	if (MediaPlaylist::readDatabaseRows (MediaControl::instance->databasePath, &errmsg, &playlists)) {
-		SDL_LockMutex (mediaPlaylistMutex);
-		mediaPlaylists.swap (playlists);
-		mediaPlaylistWriteMap.clear ();
-		SDL_UnlockMutex (mediaPlaylistMutex);
+	it->playFileActionWindowHandle.destroyAndAssign (new PlayFileActionWindow (&(it->sprites)));
+	it->playFileActionWindow->mediaReadCallback = Widget::EventCallbackContext (PlayerUi::fileMediaReadComplete, it);
+	it->showActionPopup (it->playFileActionWindow, widgetPtr, PlayerUi::fileMediaOpenButtonClicked, widgetPtr->getScreenRect (), Ui::RightEdgeAlignment, Ui::TopOfAlignment);
+	it->playFileActionWindow->assignKeyFocus ();
+	if (it->appCard) {
+		it->appCard->clearStartupPrimePanel ();
 	}
 }
-
-void PlayerUi::writeMediaPlaylists (void *itPtr) {
+void PlayerUi::fileMediaReadComplete (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
+	PlayFileActionWindow *window = (PlayFileActionWindow *) widgetPtr;
+	Json *record;
 
-	it->executeWriteMediaPlaylists ();
-	it->isWritePlaylistsComplete = true;
-	it->release ();
-}
-void PlayerUi::executeWriteMediaPlaylists () {
-	std::list<MediaPlaylist>::const_iterator i1, i2;
-	StringList sql;
-	StringList::const_iterator j1, j2;
-	StdString errmsg;
-	OpResult result;
-
-	SDL_LockMutex (mediaPlaylistMutex);
-	sql.push_back (MediaPlaylist::getDeleteExcludeSql (mediaPlaylists));
-	i1 = mediaPlaylists.cbegin ();
-	i2 = mediaPlaylists.cend ();
-	while (i1 != i2) {
-		if (mediaPlaylistWriteMap.exists (i1->id)) {
-			sql.push_back (i1->getUpsertSql ());
-		}
-		++i1;
-	}
-	mediaPlaylistWriteMap.clear ();
-	SDL_UnlockMutex (mediaPlaylistMutex);
-
-	j1 = sql.cbegin ();
-	j2 = sql.cend ();
-	while (j1 != j2) {
-		result = Database::instance->exec (MediaControl::instance->databasePath, *j1, &errmsg);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to write playlist records; result=%i errmsg=\"%s\"", result, errmsg.c_str ());
-		}
-		++j1;
-	}
-}
-
-void PlayerUi::updateSearch (int msElapsed) {
-	std::list<MediaSearch *>::const_iterator i1, i2;
-	MediaSearch *search;
-	int64_t updatetime;
-	int recordcount, setsize, availablecount;
-	bool advance, loading;
-
-	updatetime = 0;
-	availablecount = 0;
-	advance = cardView->isScrolledToBottom (App::instance->drawableHeight * bottomPaddingHeightScale);
-	loading = false;
-	SDL_LockMutex (mediaSearchMutex);
-	i1 = mediaSearchList.cbegin ();
-	i2 = mediaSearchList.cend ();
-	while (i1 != i2) {
-		search = *i1;
-		search->update (msElapsed);
-		if (search->lastStatusUpdateTime > updatetime) {
-			updatetime = search->lastStatusUpdateTime;
-		}
-		if (advance && (! search->isFindComplete) && (! search->isLoading) && (lastRecordSyncTime >= search->lastStatusUpdateTime)) {
-			search->advanceSearch ();
-		}
-		if (search->isLoading) {
-			loading = true;
-		}
-		availablecount += search->mediaAvailableCount;
-		++i1;
-	}
-	SDL_UnlockMutex (mediaSearchMutex);
-
-	if (searchStatusIcon && (mediaSearchUpdateTime != updatetime)) {
-		recordcount = 0;
-		setsize = 0;
-		SDL_LockMutex (mediaSearchMutex);
-		i1 = mediaSearchList.cbegin ();
-		i2 = mediaSearchList.cend ();
-		while (i1 != i2) {
-			search = *i1;
-			recordcount += search->searchReceiveCount;
-			setsize += search->setSize;
-			++i1;
-		}
-		SDL_UnlockMutex (mediaSearchMutex);
-		if (setsize <= 0) {
-			searchStatusIcon->setText (StdString ("0"));
-			searchStatusIcon->setTextColor (UiConfiguration::instance->inverseTextColor);
-			searchStatusIcon->setIconImageColor (UiConfiguration::instance->inverseTextColor);
-			searchStatusIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::SearchEmptyResultTooltip));
-		}
-		else if (recordcount >= setsize) {
-			searchStatusIcon->setText (StdString::createSprintf ("%i", setsize));
-			searchStatusIcon->setTextColor (UiConfiguration::instance->inverseTextColor);
-			searchStatusIcon->setIconImageColor (UiConfiguration::instance->inverseTextColor);
-			searchStatusIcon->setMouseHoverTooltip (StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::SearchComplete).capitalized ().c_str (), UiText::instance->getCountText (setsize, UiTextId::Result, UiTextId::Results).c_str ()));
+	if (window->mediaItem.id.empty ()) {
+		if (! window->loadErrorMessage.empty ()) {
+			App::instance->showNotification (StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::PlayFileError).c_str (), window->loadErrorMessage.c_str ()));
 		}
 		else {
-			searchStatusIcon->setText (StdString::createSprintf ("%i / %i", recordcount, setsize));
-			searchStatusIcon->setTextColor (UiConfiguration::instance->mediumSecondaryColor);
-			searchStatusIcon->setIconImageColor (UiConfiguration::instance->mediumSecondaryColor);
-			searchStatusIcon->setMouseHoverTooltip (StdString::createSprintf ("%s: %s %s", UiText::instance->getText (UiTextId::SearchInProgress).capitalized ().c_str (), UiText::instance->getCountText (setsize, UiTextId::Result, UiTextId::Results).c_str (), UiText::instance->getText (UiTextId::SearchInProgressTooltip).c_str ()));
+			App::instance->showNotification (UiText::instance->getText (UiTextId::InternalError));
 		}
-		searchPanel->reflow ();
-		UiStack::instance->secondaryToolbar->reflow ();
-		mediaSearchUpdateTime = updatetime;
-		syncSearchRecords ();
 	}
-
-	if (loading) {
-		if (! loadingIconWindow) {
-			loadingIconWindowHandle.assign (createLoadingIconWindow ());
-			cardView->addItem (loadingIconWindow, MediaLoadingRow);
-		}
-		if (emptyStateWindow) {
-			cardView->removeItem (emptyStateWindow->itemId);
-			emptyStateWindowHandle.clear ();
-			emptyStateType = -1;
-		}
+	else if (UiStack::instance->getPlayerCount () >= PlayerControl::maxPlayerCount) {
+		App::instance->showNotification (UiText::instance->getText (UiTextId::PlayerUiMaxPlayerCountError));
 	}
 	else {
-		if (loadingIconWindow) {
-			cardView->removeRowItems (MediaLoadingRow);
-			loadingIconWindowHandle.clear ();
-		}
-		if (isLoadingMedia) {
-			searchRecordSyncClock = 0;
-		}
+		record = window->mediaItem.createRecord (MediaControl::instance->agentId);
+		RecordStore::instance->insert (record, true);
+		delete (record);
+		it->mediaOpenRecordIds.push_back (window->mediaItem.id);
+		UiStack::instance->playMediaItem (window->mediaItem.id, 0, false);
 	}
-	isLoadingMedia = loading;
-	mediaAvailableCount = availablecount;
-
-	if (searchRecordSyncClock >= 0) {
-		searchRecordSyncClock -= msElapsed;
-		if (searchRecordSyncClock <= 0) {
-			App::instance->shouldSyncRecordStore = true;
-			searchRecordSyncClock = -1;
-		}
-	}
-}
-
-void PlayerUi::doResize () {
-	cardView->processItems (PlayerUi::doResize_processItems, this, true);
-	if (searchField) {
-		searchField->setWindowWidth (App::instance->drawableWidth * searchFieldWidthScale);
-	}
-}
-void PlayerUi::doResize_processItems (void *itPtr, Widget *itemWidget) {
-	PlayerUi *it = (PlayerUi *) itPtr;
-	MediaItemWindow *mediaitem;
-
-	mediaitem = MediaItemWindow::castWidget (itemWidget);
-	if (mediaitem) {
-		mediaitem->setDetailSize (it->detailImageSize, it->cardView->cardAreaWidth / CardView::reducedSizeItemScale);
-	}
+	it->clearPopupWidgets ();
 }
 
 void PlayerUi::doSyncRecordStore () {
+	StringList ids;
 	StringList::const_iterator i1, i2;
-	StdString mediaid;
-	Json record;
-	MediaItemWindow *item;
-	MediaItemDetailWindow *mediaitemdetail;
-	MediaItemImageWindow *mediaitemimage;
-	int type, row;
+	MediaItem mediaitem;
+	bool match, applysearchkey;
+	int type;
 
-	i1 = searchMediaItemIds.cbegin ();
-	i2 = searchMediaItemIds.cend ();
-	while (i1 != i2) {
-		mediaid = *i1;
-		if (! cardView->contains (mediaid)) {
-			if (RecordStore::instance->find (&record, mediaid, SystemInterface::CommandId_MediaItem, true)) {
-				if (mediaWindowMode == DetailLineWindowMode) {
-					mediaitemdetail = new MediaItemDetailWindow (&record);
-					item = mediaitemdetail;
-					row = MediaItemDetailRow;
-				}
-				else {
-					mediaitemimage = new MediaItemImageWindow (&record);
-					item = mediaitemimage;
-					row = MediaItemImageRow;
-				}
-
-				item->mediaImageClickCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowImageClicked, this);
-				item->viewButtonClickCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowViewButtonClicked, this);
-				item->selectStateChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowSelectStateChanged, this);
-				item->setDetailSize (detailImageSize, cardView->cardAreaWidth / CardView::reducedSizeItemScale);
-				if (selectedMediaMap.exists (mediaid)) {
-					item->setSelected (true, true);
-				}
-				cardView->addItem (item, mediaid, row);
-				cardView->animateItemScaleBump (mediaid);
-				++mediaDisplayCount;
-				loadedRecordIds.push_back (mediaid);
-			}
+	SDL_LockMutex (syncRecordMutex);
+	while (true) {
+		ids.clear ();
+		searchSyncRecordIds.swap (ids);
+		if (ids.empty ()) {
+			break;
 		}
-		++i1;
+		SDL_UnlockMutex (syncRecordMutex);
+
+		i1 = ids.cbegin ();
+		i2 = ids.cend ();
+		while (i1 != i2) {
+			showMediaItem (*i1, MediaFilescanImageRow);
+			++i1;
+		}
+
+		SDL_LockMutex (syncRecordMutex);
 	}
-	searchMediaItemIds.clear ();
+	isSearchSyncRecordWaiting = false;
+
+	applysearchkey = (! searchKey.empty ());
+	while (true) {
+		ids.clear ();
+		playHistorySyncRecordIds.swap (ids);
+		if (ids.empty ()) {
+			break;
+		}
+		SDL_UnlockMutex (syncRecordMutex);
+
+		i1 = ids.cbegin ();
+		i2 = ids.cend ();
+		while (i1 != i2) {
+			match = true;
+			if (applysearchkey) {
+				if (mediaitem.readRecordStore (*i1, true)) {
+					if (! mediaitem.match (searchKey)) {
+						match = false;
+					}
+				}
+			}
+			if (match) {
+				showMediaItem (*i1, PlayHistoryImageRow);
+			}
+			++i1;
+		}
+
+		SDL_LockMutex (syncRecordMutex);
+	}
+	SDL_UnlockMutex (syncRecordMutex);
+	resetPlayHistoryCount ();
 
 	type = -1;
-	if (MediaControl::instance->isReady && (! isLoadingMedia) && (mediaDisplayCount <= 0)) {
+	if (MediaControl::instance->mainOptions.mediaScan && MediaControl::instance->isReady && (! isLoadingMedia) && (mediaDisplayCount <= 0)) {
 		if (mediaAvailableCount <= 0) {
 			type = EmptyMediaState;
 		}
@@ -779,7 +858,7 @@ void PlayerUi::doSyncRecordStore () {
 		}
 		if (emptyStateWindow) {
 			emptyStateWindow->itemId.assign (cardView->getAvailableItemId ());
-			cardView->addItem (emptyStateWindow, emptyStateWindow->itemId, EmptyMediaRow);
+			cardView->addItem (emptyStateWindow, emptyStateWindow->itemId, MediaFilescanEmptyCardRow);
 		}
 	}
 	emptyStateType = type;
@@ -803,27 +882,88 @@ void PlayerUi::doSyncRecordStore () {
 	cardView->syncRecordStore ();
 	cardView->reflow ();
 	resetExpandToggles ();
-	lastRecordSyncTime = OsUtil::getTime ();
+}
+void PlayerUi::showMediaItem (const StdString &recordId, int baseRow) {
+	Json record;
+	MediaItemWindow *item;
+	MediaItemDetailWindow *mediaitemdetail;
+	MediaItemImageWindow *mediaitemimage;
+	int row;
+
+	if (cardView->contains (recordId)) {
+		return;
+	}
+	if (RecordStore::instance->find (&record, recordId, SystemInterface::CommandId_MediaItem, true)) {
+		if (mediaWindowMode == DetailLineWindowMode) {
+			mediaitemdetail = new MediaItemDetailWindow (&record);
+			item = mediaitemdetail;
+		}
+		else {
+			mediaitemimage = new MediaItemImageWindow (&record);
+			item = mediaitemimage;
+		}
+		row = baseRow + mediaWindowMode;
+
+		item->mediaImageClickCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowImageClicked, this);
+		item->viewButtonClickCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowViewButtonClicked, this);
+		item->selectStateChangeCallback = Widget::EventCallbackContext (PlayerUi::mediaItemWindowSelectStateChanged, this);
+		item->setDetailSize (detailImageSize, cardView->cardAreaWidth / CardView::reducedSizeItemScale);
+		if (selectedMediaMap.exists (recordId)) {
+			item->setSelected (true, true);
+		}
+		if (baseRow == MediaFilescanImageRow) {
+			item->isTagEnabled = true;
+			item->isPlayMarkerEnabled = true;
+		}
+		else if (baseRow == PlayHistoryImageRow) {
+			item->sortKey.sprintf ("%016llx", (long long int) item->mediaItem.mtime);
+		}
+		cardView->addItem (item, recordId, row);
+		if (baseRow == MediaFilescanImageRow) {
+			cardView->animateItemScaleBump (recordId);
+		}
+		++mediaDisplayCount;
+		loadedRecordIds.push_back (recordId);
+	}
 }
 
-void PlayerUi::mediaSearchRecordsAdded (void *itPtr, MediaSearch *search) {
+void PlayerUi::setLoadingIconVisible (bool show) {
+	if (show) {
+		if (! loadingIconWindow) {
+			loadingIconWindowHandle.assign (createLoadingIconWindow ());
+			cardView->addItem (loadingIconWindow, LoadingIconRow);
+		}
+	}
+	else {
+		if (loadingIconWindow) {
+			cardView->removeRowItems (LoadingIconRow);
+			loadingIconWindowHandle.clear ();
+		}
+	}
+}
+
+void PlayerUi::mediaSearchRecordsAdded (void *itPtr, const StringList &recordIds) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
-	it->searchMediaItemIds.append (search->eventRecordIds);
+	SDL_LockMutex (it->syncRecordMutex);
+	it->searchSyncRecordIds.append (recordIds);
+	it->isSearchSyncRecordWaiting = true;
+	SDL_UnlockMutex (it->syncRecordMutex);
+	App::instance->shouldSyncRecordStore = true;
 }
-
-void PlayerUi::mediaSearchRecordsRemoved (void *itPtr, MediaSearch *search) {
+void PlayerUi::mediaSearchRecordsRemoved (void *itPtr, const StringList &recordIds) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 	StringList::const_iterator i1, i2;
 	StdString id;
 
-	i1 = search->eventRecordIds.cbegin ();
-	i2 = search->eventRecordIds.cend ();
+	i1 = recordIds.cbegin ();
+	i2 = recordIds.cend ();
 	while (i1 != i2) {
 		id = *i1;
 		if (it->cardView->contains (id)) {
 			it->cardView->removeItem (id);
 			it->loadedRecordIds.remove (id);
+			it->selectedMediaMap.remove (id);
 			RecordStore::instance->remove (id);
 		}
 		++i1;
@@ -832,18 +972,17 @@ void PlayerUi::mediaSearchRecordsRemoved (void *itPtr, MediaSearch *search) {
 }
 
 void PlayerUi::resetSearch () {
-	std::list<MediaSearch *>::iterator i1, i2;
-
-	SDL_LockMutex (mediaSearchMutex);
-	i1 = mediaSearchList.begin ();
-	i2 = mediaSearchList.end ();
-	while (i1 != i2) {
-		(*i1)->resetSearch (searchKey, mediaSortOrder);
-		++i1;
-	}
-	SDL_UnlockMutex (mediaSearchMutex);
-
+	MediaSearchGroup::instance->resetSearch (searchKey, mediaSortOrder);
 	mediaDisplayCount = 0;
+
+	if (playerUiOptions.showPlayHistory) {
+		cardView->removeRowItems (PlayHistoryDetailRow);
+		cardView->removeRowItems (PlayHistoryImageRow);
+		SDL_LockMutex (syncRecordMutex);
+		playHistorySyncRecordIds.append (playHistoryRecordIds);
+		SDL_UnlockMutex (syncRecordMutex);
+		App::instance->shouldSyncRecordStore = true;
+	}
 }
 
 void PlayerUi::searchFieldEdited (void *itPtr, Widget *widgetPtr) {
@@ -859,6 +998,49 @@ void PlayerUi::searchButtonClicked (void *itPtr, Widget *widgetPtr) {
 	it->searchKey.assign (it->searchField->getValue ());
 	it->resetSearch ();
 	it->clearPopupWidgets ();
+}
+
+void PlayerUi::mediaControlPlayHistoryRecordAdded (void *itPtr, const StdString &recordId) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	it->playHistoryRecordIds.push_back (recordId);
+	if (it->playerUiOptions.showPlayHistory) {
+		SDL_LockMutex (it->syncRecordMutex);
+		it->playHistorySyncRecordIds.append (recordId);
+		SDL_UnlockMutex (it->syncRecordMutex);
+		App::instance->shouldSyncRecordStore = true;
+		it->resetPlayHistoryCount ();
+	}
+}
+void PlayerUi::mediaControlPlayHistoryRecordRemoved (void *itPtr, const StdString &recordId) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	it->playHistoryRecordIds.remove (recordId);
+	it->cardView->removeItem (recordId);
+	it->selectedMediaMap.remove (recordId);
+	it->resetPlayHistoryCount ();
+}
+
+bool PlayerUi::doProcessKeyEvent (SDL_Keycode keycode, bool isShiftDown, bool isControlDown) {
+	if (isControlDown && (keycode == fileMediaOpenKeycode)) {
+		if (fileMediaOpenButton) {
+			fileMediaOpenButton->mouseClick ();
+			if (playFileActionWindow) {
+				playFileActionWindow->mouseClickFsBrowseButton ();
+			}
+			return (true);
+		}
+	}
+	return (false);
+}
+
+void PlayerUi::clearPlayHistoryButtonClicked (void *itPtr, Widget *widgetPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (it->playHistoryRecordIds.empty ()) {
+		return;
+	}
+	MediaControl::instance->clearPlayHistory ();
 }
 
 void PlayerUi::selectAllButtonFocused (void *itPtr, Widget *widgetPtr) {
@@ -894,7 +1076,6 @@ void PlayerUi::playerMenuButtonClicked (void *itPtr, Widget *widgetPtr) {
 	}
 	menu = new Menu ();
 	menu->isClickDestroyEnabled = true;
-	menu->addItem (UiText::instance->getText (UiTextId::ShowPlaylists).capitalized (), it->sprites.getSprite (SpriteId::PlayerUi_createPlaylistButton), Widget::EventCallbackContext (PlayerUi::showPlaylistsActionClicked, it), 3, it->isShowingPlaylists);
 	menu->addItem (UiText::instance->getText (UiTextId::ShowGrid).capitalized (), it->sprites.getSprite (SpriteId::PlayerUi_layoutButton), Widget::EventCallbackContext (PlayerUi::boxLayoutActionClicked, it), 1, it->mediaWindowMode == ImageGridWindowMode);
 	menu->addItem (UiText::instance->getText (UiTextId::ShowLines).capitalized (), it->sprites.getSprite (SpriteId::PlayerUi_layoutButton), Widget::EventCallbackContext (PlayerUi::lineLayoutActionClicked, it), 1, it->mediaWindowMode == DetailLineWindowMode);
 	menu->addItem (UiText::instance->getText (UiTextId::SortByName).capitalized (), it->sprites.getSprite (SpriteId::PlayerUi_sortButton), Widget::EventCallbackContext (PlayerUi::sortByNameActionClicked, it), 2, it->mediaSortOrder == SystemInterface::Constant_NameSort);
@@ -916,12 +1097,11 @@ void PlayerUi::setMediaItemWindowMode (int mode) {
 	}
 	mediaWindowMode = mode;
 	if (mediaWindowMode == ImageGridWindowMode) {
-		cardView->removeRowItems (MediaItemDetailRow);
+		cardView->removeRowItems (MediaFilescanDetailRow);
 	}
 	else {
-		cardView->removeRowItems (MediaItemImageRow);
+		cardView->removeRowItems (MediaFilescanImageRow);
 	}
-	App::instance->shouldSyncRecordStore = true;
 	resetSearch ();
 }
 
@@ -960,12 +1140,6 @@ void PlayerUi::setSortKey (MediaPlaylistWindow *mediaPlaylist, int64_t sequenceV
 	else {
 		mediaPlaylist->sortKey.assign (mediaPlaylist->playlist.name.lowercased ().c_str ());
 	}
-}
-
-void PlayerUi::showPlaylistsActionClicked (void *itPtr, Widget *widgetPtr) {
-	PlayerUi *it = (PlayerUi *) itPtr;
-
-	it->isShowingPlaylists = (! it->isShowingPlaylists);
 }
 
 void PlayerUi::handleDetailImageSizeChange_processItems (void *itPtr, Widget *itemWidget) {
@@ -1058,7 +1232,10 @@ void PlayerUi::mediaItemUiEnded (void *itPtr, Ui *uiPtr) {
 
 	if (it->targetMediaItemWindow) {
 		if (ui->playTimestamp >= 0) {
-			UiStack::instance->playMedia (ui->mediaId, ui->playTimestamp);
+			it->mediaItemUiPlayId.assign (ui->mediaId);
+			it->mediaItemUiPlayTimestamp = ui->playTimestamp;
+			it->retain ();
+			App::instance->addUpdateTask (PlayerUi::playMediaItemUiTarget, it);
 		}
 		else if (ui->selectPlayPositionTimestamp >= 0) {
 			it->targetMediaItemWindow->setPlayTimestamp (ui->selectPlayPositionTimestamp);
@@ -1068,21 +1245,34 @@ void PlayerUi::mediaItemUiEnded (void *itPtr, Ui *uiPtr) {
 		it->targetMediaItemWindowHandle.clear ();
 	}
 }
+void PlayerUi::playMediaItemUiTarget (void *itPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if ((! it->mediaItemUiPlayId.empty ()) && (it->mediaItemUiPlayTimestamp >= 0)) {
+		if (UiStack::instance->getPlayerCount () >= PlayerControl::maxPlayerCount) {
+			App::instance->showNotification (UiText::instance->getText (UiTextId::PlayerUiMaxPlayerCountError));
+		}
+		else {
+			UiStack::instance->playMediaItem (it->mediaItemUiPlayId, it->mediaItemUiPlayTimestamp);
+		}
+	}
+	it->mediaItemUiPlayId.assign ("");
+	it->mediaItemUiPlayTimestamp = 0;
+	it->release ();
+}
 
 void PlayerUi::mediaItemWindowCardViewItemLabel (void *itPtr, Widget *itemWidget, CardLabelWindow *cardLabel) {
 	MediaItemWindow *mediaitem;
-	StdString text;
 
 	mediaitem = MediaItemWindow::castWidget (itemWidget);
 	if (mediaitem) {
-		if (mediaitem->playTimestamp <= 0) {
-			text.assign (mediaitem->mediaItem.name);
+		cardLabel->setMainText (mediaitem->mediaItem.name);
+		if (mediaitem->mediaItem.playSeekTimestamp <= 0) {
+			cardLabel->setLeftText (StdString ());
 		}
 		else {
-			text.sprintf ("<%s> ", UiText::instance->getTimespanText (mediaitem->playTimestamp, UiText::HoursUnit, true).c_str ());
-			text.append (mediaitem->mediaItem.name);
+			cardLabel->setLeftText (UiText::instance->getTimespanText (mediaitem->mediaItem.playSeekTimestamp, UiText::HoursUnit, true), UiConfiguration::instance->darkInverseTextColor, UiConfiguration::instance->mediumPrimaryColor);
 		}
-		cardLabel->setText (text);
 	}
 }
 
@@ -1121,19 +1311,17 @@ static void expandPlaylistsToggleStateChanged_appendPlaylistId (void *stringList
 
 	playlist = MediaPlaylistWindow::castWidget (widgetPtr);
 	if (playlist) {
-		((StringList *) stringListPtr)->push_back (playlist->itemId);
+		((StringList *) stringListPtr)->push_back (playlist->playlist.id);
 	}
 }
 void PlayerUi::expandPlaylistsToggleStateChanged (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
+	Toggle *toggle = (Toggle *) widgetPtr;
 	MediaPlaylistWindow *playlist;
 	StringList idlist;
 	StringList::iterator i1, i2;
 	int64_t now;
 
-	if (! it->expandPlaylistsToggle) {
-		return;
-	}
 	now = OsUtil::getTime ();
 	it->cardView->processItems (expandPlaylistsToggleStateChanged_appendPlaylistId, &idlist);
 	i1 = idlist.begin ();
@@ -1141,10 +1329,10 @@ void PlayerUi::expandPlaylistsToggleStateChanged (void *itPtr, Widget *widgetPtr
 	while (i1 != i2) {
 		playlist = MediaPlaylistWindow::castWidget (it->cardView->getItem (*i1));
 		if (playlist) {
-			playlist->setExpanded (! it->expandPlaylistsToggle->isChecked, true);
+			playlist->setExpanded (! toggle->isChecked, true);
 			it->setSortKey (playlist, now);
-			it->cardView->setItemRow (playlist->itemId, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow, true);
-			it->updatePlaylistRecord (playlist->playlist);
+			it->cardView->setItemRow (playlist->playlist.id, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow, true);
+			playlist->writeRecord ();
 		}
 		++i1;
 	}
@@ -1158,27 +1346,25 @@ void PlayerUi::appCardExpandStateChanged (void *itPtr, Widget *widgetPtr) {
 	window->resetInputState ();
 	it->cardView->animateItemScaleBump (window->itemId);
 	it->clearPopupWidgets ();
-	it->cardView->setItemRow (window->itemId, window->isExpanded ? ExpandedMediaControlRow : UnexpandedMediaControlRow, true);
+	it->cardView->setItemRow (window->itemId, window->isExpanded ? ExpandedControlRow : UnexpandedControlRow, true);
 	it->cardView->reflow ();
 }
-
 void PlayerUi::appCardLayoutChanged (void *itPtr, Widget *widgetPtr) {
 	((PlayerUi *) itPtr)->cardView->reflow ();
 }
 
-void PlayerUi::mediaControlWindowExpandStateChanged (void *itPtr, Widget *widgetPtr) {
+void PlayerUi::mediaFilescanWindowExpandStateChanged (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
-	MediaControlWindow *window = (MediaControlWindow *) widgetPtr;
+	MediaFilescanWindow *window = (MediaFilescanWindow *) widgetPtr;
 
 	window->resetInputState ();
 	it->cardView->animateItemScaleBump (window->itemId);
 	it->resetExpandToggles ();
 	it->clearPopupWidgets ();
-	it->cardView->setItemRow (window->itemId, window->isExpanded ? ExpandedMediaControlRow : UnexpandedMediaControlRow, true);
+	it->cardView->setItemRow (window->itemId, window->isExpanded ? ExpandedControlRow : UnexpandedControlRow, true);
 	it->cardView->reflow ();
 }
-
-void PlayerUi::mediaControlWindowLayoutChanged (void *itPtr, Widget *widgetPtr) {
+void PlayerUi::mediaFilescanWindowLayoutChanged (void *itPtr, Widget *widgetPtr) {
 	((PlayerUi *) itPtr)->cardView->reflow ();
 }
 
@@ -1187,20 +1373,17 @@ void PlayerUi::playlistExpandStateChanged (void *itPtr, Widget *widgetPtr) {
 	MediaPlaylistWindow *playlist = (MediaPlaylistWindow *) widgetPtr;
 
 	it->setSortKey (playlist);
-	it->cardView->setItemRow (playlist->itemId, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow, true);
+	it->cardView->setItemRow (playlist->playlist.id, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow, true);
 	playlist->resetInputState ();
-	it->cardView->animateItemScaleBump (playlist->itemId);
+	playlist->writeRecord ();
+	it->cardView->animateItemScaleBump (playlist->playlist.id);
 	it->resetExpandToggles ();
 	it->clearPopupWidgets ();
 	it->cardView->reflow ();
-	it->updatePlaylistRecord (playlist->playlist);
 }
 
 void PlayerUi::playlistOptionChanged (void *itPtr, Widget *widgetPtr) {
-	PlayerUi *it = (PlayerUi *) itPtr;
-	MediaPlaylistWindow *playlist = (MediaPlaylistWindow *) widgetPtr;
-
-	it->updatePlaylistRecord (playlist->playlist);
+	((MediaPlaylistWindow *) widgetPtr)->writeRecord ();
 }
 
 void PlayerUi::playlistRenameActionClicked (void *itPtr, Widget *widgetPtr) {
@@ -1233,9 +1416,9 @@ void PlayerUi::playlistNameEdited (void *itPtr, Widget *widgetPtr) {
 	}
 	playlist->setPlaylistName (textfield->getValue ());
 	it->setSortKey (playlist);
+	playlist->writeRecord ();
 	it->clearPopupWidgets ();
 	it->cardView->reflow ();
-	it->updatePlaylistRecord (playlist->playlist);
 }
 
 void PlayerUi::playlistNameEditEnterButtonClicked (void *itPtr, Widget *widgetPtr) {
@@ -1273,9 +1456,9 @@ void PlayerUi::removePlaylistActionClosed (void *itPtr, Widget *widgetPtr) {
 		return;
 	}
 	UiStack::instance->stopPlaylist (playlist->playlist.id);
-	it->cardView->removeItem (playlist->itemId);
+	playlist->removeRecord ();
+	it->cardView->removeItem (playlist->playlist.id);
 	it->resetExpandToggles ();
-	it->removePlaylistRecord (playlist->playlist.id);
 }
 
 void PlayerUi::playlistAddItemActionClicked (void *itPtr, Widget *widgetPtr) {
@@ -1286,7 +1469,7 @@ void PlayerUi::playlistAddItemActionClicked (void *itPtr, Widget *widgetPtr) {
 	StdString mediaid;
 	int count;
 
-	if (it->selectedMediaMap.empty () || it->getSelectedMediaNames (true).empty ()) {
+	if (it->selectedMediaMap.empty () || it->getSelectedMediaNames ().empty ()) {
 		return;
 	}
 	count = 0;
@@ -1294,9 +1477,12 @@ void PlayerUi::playlistAddItemActionClicked (void *itPtr, Widget *widgetPtr) {
 	while (it->selectedMediaMap.next (&i, &mediaid)) {
 		mediaitem = MediaItemWindow::castWidget (it->cardView->getItem (mediaid));
 		if (mediaitem) {
-			playlist->addItem (mediaitem->mediaId, mediaitem->playTimestamp);
+			playlist->addItem (mediaitem->mediaItem);
 			++count;
 		}
+	}
+	if (count > 0) {
+		playlist->writeRecord ();
 	}
 
 	it->clearPopupWidgets ();
@@ -1312,7 +1498,6 @@ void PlayerUi::playlistAddItemActionClicked (void *itPtr, Widget *widgetPtr) {
 		}
 		it->cardView->reflow ();
 	}
-	it->updatePlaylistRecord (playlist->playlist);
 }
 
 void PlayerUi::playlistAddItemFocused (void *itPtr, Widget *widgetPtr) {
@@ -1325,7 +1510,7 @@ void PlayerUi::playlistAddItemFocused (void *itPtr, Widget *widgetPtr) {
 	text.assign (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (playlist->playlist.name, App::instance->rootPanel->width * 0.20f, Font::dotTruncateSuffix));
 	icon1 = it->createToolPopupLabel (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallPlaylistIcon), text, color);
 
-	text.assign (it->getSelectedMediaNames (true));
+	text.assign (it->getSelectedMediaNames ());
 	color.assign (UiConfiguration::instance->primaryTextColor);
 	if (text.empty ()) {
 		text.assign (UiText::instance->getText (UiTextId::PlayerUiNoMediaSelectedPrompt));
@@ -1348,10 +1533,7 @@ void PlayerUi::playlistEditActionClicked (void *itPtr, Widget *widgetPtr) {
 	}
 }
 void PlayerUi::mediaPlaylistUiEnded (void *itPtr, Ui *uiPtr) {
-	PlayerUi *it = (PlayerUi *) itPtr;
-	MediaPlaylistUi *playlistui = (MediaPlaylistUi *) uiPtr;
-
-	it->updatePlaylistRecord (playlistui->playlist->playlist);
+	((MediaPlaylistUi *) uiPtr)->playlist->writeRecord ();
 }
 
 void PlayerUi::playlistPlayActionClicked (void *itPtr, Widget *widgetPtr) {
@@ -1359,7 +1541,12 @@ void PlayerUi::playlistPlayActionClicked (void *itPtr, Widget *widgetPtr) {
 
 	playlist = MediaPlaylistWindow::castWidget (widgetPtr);
 	if (playlist) {
-		UiStack::instance->playPlaylist (playlist);
+		if (UiStack::instance->getPlayerCount () >= PlayerControl::maxPlayerCount) {
+			App::instance->showNotification (UiText::instance->getText (UiTextId::PlayerUiMaxPlayerCountError));
+		}
+		else {
+			UiStack::instance->playPlaylist (playlist);
+		}
 	}
 }
 
@@ -1368,7 +1555,7 @@ void PlayerUi::playButtonFocused (void *itPtr, Widget *widgetPtr) {
 	StdString text;
 	Color color;
 
-	text.assign (it->getSelectedMediaNames (true));
+	text.assign (it->getSelectedMediaNames ());
 	color.assign (UiConfiguration::instance->primaryTextColor);
 	if (text.empty ()) {
 		text.assign (UiText::instance->getText (UiTextId::PlayerUiNoMediaSelectedPrompt));
@@ -1381,9 +1568,9 @@ void PlayerUi::playButtonClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi *it = (PlayerUi *) itPtr;
 
 	it->clearPopupWidgets ();
-	it->playSelectedStreams ();
+	it->playSelectedMedia ();
 }
-void PlayerUi::playSelectedStreams () {
+void PlayerUi::playSelectedMedia () {
 	StringList keys;
 	StringList::const_iterator i1, i2;
 	StdString id;
@@ -1393,11 +1580,12 @@ void PlayerUi::playSelectedStreams () {
 
 	playercount = UiStack::instance->getPlayerCount ();
 	if (playercount >= PlayerControl::maxPlayerCount) {
+		App::instance->showNotification (UiText::instance->getText (UiTextId::PlayerUiMaxPlayerCountError));
 		return;
 	}
 	detached = false;
 	if (lastSelectedMediaItemWindow) {
-		UiStack::instance->playMedia (lastSelectedMediaItemWindow->mediaId, lastSelectedMediaItemWindow->playTimestamp > 0 ? lastSelectedMediaItemWindow->playTimestamp : 0, false);
+		UiStack::instance->playMediaItem (lastSelectedMediaItemWindow->mediaId, lastSelectedMediaItemWindow->mediaItem.playSeekTimestamp > 0 ? lastSelectedMediaItemWindow->mediaItem.playSeekTimestamp : 0, false);
 		selectedMediaMap.remove (lastSelectedMediaItemWindow->mediaId);
 		lastSelectedMediaItemWindow->setSelected (false, true);
 		lastSelectedMediaItemWindowHandle.clear ();
@@ -1415,7 +1603,7 @@ void PlayerUi::playSelectedStreams () {
 			if (playercount >= PlayerControl::maxPlayerCount) {
 				break;
 			}
-			UiStack::instance->playMedia (mediaitem->mediaId, mediaitem->playTimestamp > 0 ? mediaitem->playTimestamp : 0, detached);
+			UiStack::instance->playMediaItem (mediaitem->mediaId, mediaitem->mediaItem.playSeekTimestamp > 0 ? mediaitem->mediaItem.playSeekTimestamp : 0, detached);
 			selectedMediaMap.remove (id);
 			mediaitem->setSelected (false, true);
 			detached = true;
@@ -1514,10 +1702,10 @@ void PlayerUi::tagButtonFocused (void *itPtr, Widget *widgetPtr) {
 	StdString text;
 	Color color;
 
-	text.assign (it->getSelectedMediaNames (false));
+	text.assign (it->getSelectedMediaNames (true));
 	color.assign (UiConfiguration::instance->primaryTextColor);
 	if (text.empty ()) {
-		text.assign (UiText::instance->getText (UiTextId::PlayerUiNoMediaSelectedPrompt));
+		text.assign (UiText::instance->getText (UiTextId::PlayerUiNoTagMediaSelectedPrompt));
 		color.assign (UiConfiguration::instance->errorTextColor);
 	}
 	it->showToolPopup (widgetPtr, UiText::instance->getText (UiTextId::PlayerUiTagActionPrompt), it->createToolPopupLabel (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallMediaIcon), text, color));
@@ -1531,7 +1719,7 @@ void PlayerUi::tagButtonClicked (void *itPtr, Widget *widgetPtr) {
 	if (it->clearActionPopup (widgetPtr, PlayerUi::tagButtonClicked)) {
 		return;
 	}
-	text.assign (it->getSelectedMediaNames (false));
+	text.assign (it->getSelectedMediaNames (true));
 	if (text.empty ()) {
 		return;
 	}
@@ -1550,7 +1738,7 @@ void PlayerUi::tagActionWindowAddClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi::TagTask *task;
 	StringList keys;
 
-	it->selectedMediaMap.getKeys (&keys);
+	it->getSelectedTagEnabledMediaIds (&keys);
 	if (keys.empty ()) {
 		return;
 	}
@@ -1570,7 +1758,7 @@ void PlayerUi::tagActionWindowRemoveClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerUi::TagTask *task;
 	StringList keys;
 
-	it->selectedMediaMap.getKeys (&keys);
+	it->getSelectedTagEnabledMediaIds (&keys);
 	if (keys.empty ()) {
 		return;
 	}
@@ -1593,7 +1781,7 @@ void PlayerUi::addTags (void *taskPtr) {
 	App::instance->unsetUiActive ();
 }
 void PlayerUi::executeAddTags (PlayerUi::TagTask *task) {
-	StdString sql, errmsg;
+	StdString sql, dbpath, errmsg;
 	OpResult result;
 	StringList::const_iterator i1, i2;
 	MediaItem mediaitem;
@@ -1610,8 +1798,12 @@ void PlayerUi::executeAddTags (PlayerUi::TagTask *task) {
 		if (mediaitem.readRecordStore (*i1)) {
 			if (! mediaitem.tags.contains (task->tag)) {
 				mediaitem.tags.push_back (task->tag);
-				sql = MediaItem::getUpdateTagsSql (mediaitem.mediaId, mediaitem.tags);
-				result = Database::instance->exec (MediaControl::instance->databasePath, sql, &errmsg);
+				sql = MediaItem::getUpdateTagsSql (MediaControl::filescanTableName, mediaitem.id, mediaitem.tags);
+				result = MediaControl::instance->openDatabase (&dbpath);
+				if (result == OpResult::Success) {
+					result = Database::instance->exec (dbpath, sql, &errmsg);
+					Database::instance->close (dbpath);
+				}
 				if (result != OpResult::Success) {
 					err = true;
 				}
@@ -1643,7 +1835,7 @@ void PlayerUi::removeTags (void *taskPtr) {
 	App::instance->unsetUiActive ();
 }
 void PlayerUi::executeRemoveTags (PlayerUi::TagTask *task) {
-	StdString sql, errmsg;
+	StdString sql, dbpath, errmsg;
 	OpResult result;
 	StringList::const_iterator i1, i2;
 	MediaItem mediaitem;
@@ -1660,8 +1852,12 @@ void PlayerUi::executeRemoveTags (PlayerUi::TagTask *task) {
 		if (mediaitem.readRecordStore (*i1)) {
 			if (mediaitem.tags.contains (task->tag)) {
 				mediaitem.tags.remove (task->tag);
-				sql = MediaItem::getUpdateTagsSql (mediaitem.mediaId, mediaitem.tags);
-				result = Database::instance->exec (MediaControl::instance->databasePath, sql, &errmsg);
+				sql = MediaItem::getUpdateTagsSql (MediaControl::filescanTableName, mediaitem.id, mediaitem.tags);
+				result = MediaControl::instance->openDatabase (&dbpath);
+				if (result == OpResult::Success) {
+					result = Database::instance->exec (dbpath, sql, &errmsg);
+					Database::instance->close (dbpath);
+				}
 				if (result != OpResult::Success) {
 					err = true;
 				}
@@ -1690,21 +1886,79 @@ void PlayerUi::createPlaylistButtonClicked (void *itPtr, Widget *widgetPtr) {
 
 	playlist = it->createMediaPlaylistWindow ();
 	playlist->resetPlaylistId ();
-	playlist->itemId.assign (it->cardView->getAvailableItemId ());
 	playlist->setPlaylistName (it->getAvailablePlaylistName ());
 	playlist->setExpanded (true);
-	it->cardView->addItem (playlist, playlist->itemId, ExpandedPlaylistRow);
-	it->cardView->animateItemScaleBump (playlist->itemId);
+	it->cardView->addItem (playlist, playlist->playlist.id, ExpandedPlaylistRow);
+	it->cardView->animateItemScaleBump (playlist->playlist.id);
 
-	it->cardView->scrollToItem (playlist->itemId);
+	it->cardView->scrollToItem (playlist->playlist.id);
 	it->cardView->reflow ();
 	it->resetExpandToggles ();
 	App::instance->showNotification (StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::CreatedPlaylist).capitalized ().c_str (), playlist->playlist.name.c_str ()));
 
-	it->updatePlaylistRecord (playlist->playlist);
+	playlist->writeRecord ();
 }
 
-StdString PlayerUi::getSelectedMediaNames (bool isPlayableMediaRequired) {
+void PlayerUi::loadMediaPlaylists (void *itPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	it->executeLoadMediaPlaylists ();
+	it->isLoadMediaPlaylistsComplete = true;
+	it->release ();
+}
+void PlayerUi::executeLoadMediaPlaylists () {
+	StdString dbpath, errmsg;
+
+	mediaPlaylists.clear ();
+	if (MediaControl::instance->openDatabase (&dbpath) != OpResult::Success) {
+		return;
+	}
+	if (! MediaPlaylist::readDatabaseRows (dbpath, MediaControl::playlistTableName, &errmsg, &mediaPlaylists)) {
+		mediaPlaylists.clear ();
+		Log::debug ("Failed to read playlist data; err=%s", errmsg.c_str ());
+	}
+	Database::instance->close (dbpath);
+}
+
+void PlayerUi::awaitLoadMediaPlaylistsComplete (void *itPtr) {
+	PlayerUi *it = (PlayerUi *) itPtr;
+
+	if (App::instance->isShuttingDown || App::instance->isShutdown) {
+		it->release ();
+		return;
+	}
+	if (! it->isLoadMediaPlaylistsComplete) {
+		App::instance->addUpdateTask (PlayerUi::awaitLoadMediaPlaylistsComplete, it);
+		return;
+	}
+	it->populateMediaPlaylistWindows ();
+	App::instance->unsetUiActive ();
+	it->release ();
+}
+void PlayerUi::populateMediaPlaylistWindows () {
+	std::list<MediaPlaylist>::const_iterator i1, i2;
+	MediaPlaylistWindow *playlist;
+	int64_t seq;
+
+	cardView->removeRowItems (ExpandedPlaylistRow);
+	cardView->removeRowItems (UnexpandedPlaylistRow);
+	seq = 1;
+	i1 = mediaPlaylists.cbegin ();
+	i2 = mediaPlaylists.cend ();
+	while (i1 != i2) {
+		playlist = createMediaPlaylistWindow ();
+		playlist->read (*i1);
+		setSortKey (playlist, seq);
+		cardView->addItem (playlist, playlist->playlist.id, playlist->isExpanded ? ExpandedPlaylistRow : UnexpandedPlaylistRow);
+		cardView->animateItemScaleBump (playlist->playlist.id);
+
+		++seq;
+		++i1;
+	}
+	mediaPlaylists.clear ();
+}
+
+StdString PlayerUi::getSelectedMediaNames (bool requireTagEnabled) {
 	StdString id;
 	HashMap::Iterator i;
 	MediaItemWindow *mediaitem;
@@ -1714,7 +1968,7 @@ StdString PlayerUi::getSelectedMediaNames (bool isPlayableMediaRequired) {
 	while (selectedMediaMap.next (&i, &id)) {
 		mediaitem = MediaItemWindow::castWidget (cardView->getItem (id));
 		if (mediaitem) {
-			if (isPlayableMediaRequired && (! mediaitem->isPlayable)) {
+			if (requireTagEnabled && (! mediaitem->isTagEnabled)) {
 				continue;
 			}
 			names.push_back (selectedMediaMap.find (id, ""));
@@ -1727,6 +1981,25 @@ StdString PlayerUi::getSelectedMediaNames (bool isPlayableMediaRequired) {
 	return (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (names.join (", "), App::instance->rootPanel->width * textTruncateWidthScale, StdString::createSprintf ("... (%i)", (int) names.size ())));
 }
 
+void PlayerUi::getSelectedTagEnabledMediaIds (StringList *destList) {
+	StringList keys;
+	StringList::const_iterator i1, i2;
+	MediaItemWindow *mediaitem;
+	StdString id;
+
+	selectedMediaMap.getKeys (&keys);
+	i1 = keys.cbegin ();
+	i2 = keys.cend ();
+	while (i1 != i2) {
+		id = *i1;
+		mediaitem = MediaItemWindow::castWidget (cardView->getItem (id));
+		if (mediaitem && mediaitem->isTagEnabled) {
+			destList->push_back (id);
+		}
+		++i1;
+	}
+}
+
 void PlayerUi::unselectAllMedia () {
 	StringList keys;
 	StringList::const_iterator i1, i2;
@@ -1737,7 +2010,7 @@ void PlayerUi::unselectAllMedia () {
 	i1 = keys.cbegin ();
 	i2 = keys.cend ();
 	while (i1 != i2) {
-		id.assign (*i1);
+		id = *i1;
 		mediaitem = MediaItemWindow::castWidget (cardView->getItem (id));
 		if (mediaitem) {
 			mediaitem->setSelected (false, true);
@@ -1768,6 +2041,28 @@ void PlayerUi::resetExpandToggles () {
 	}
 }
 
+void PlayerUi::resetPlayHistoryCount () {
+	int count, historysize;
+
+	if (playHistoryHeaderPanel && playHistoryCountLabel) {
+		historysize = MediaControl::instance->getPlayHistorySize ();
+		if (historysize <= 0) {
+			playHistoryCountLabel->setText (UiText::instance->getText (UiTextId::PlayerUiEmptyPlayHistoryPrompt));
+		}
+		else {
+			count = cardView->getRowItemCount (PlayHistoryImageRow) + cardView->getRowItemCount (PlayHistoryDetailRow);
+			if (count < historysize) {
+				playHistoryCountLabel->setText (StdString::createSprintf ("%s (%i / %i)", UiText::instance->getText (UiTextId::PlayedItems).capitalized ().c_str (), count, historysize));
+			}
+			else {
+				playHistoryCountLabel->setText (StdString::createSprintf ("%s (%i)", UiText::instance->getText (UiTextId::PlayedItems).capitalized ().c_str (), historysize));
+			}
+		}
+		playHistoryHeaderPanel->reflow ();
+		cardView->reflow ();
+	}
+}
+
 void PlayerUi::syncSearchRecords () {
 	if (searchRecordSyncClock < 0) {
 		searchRecordSyncClock = UiConfiguration::instance->recordSyncDelayDuration;
@@ -1780,14 +2075,11 @@ int PlayerUi::getSelectedMediaCount () {
 
 void PlayerUi::setHelpWindowContent (HelpWindow *helpWindow) {
 	helpWindow->setHelpText (UiText::instance->getText (UiTextId::PlayerUiHelpTitle), UiText::instance->getText (UiTextId::PlayerUiHelpText));
-	if (! MediaControl::instance->isConfigured) {
-		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction1Text), HelpWindow::InfoAction, UiText::instance->getText (UiTextId::LearnMore).capitalized (), AppUrl::instance->help (AppUrl::MediaPlayerStart, true), AppUrl::instance->help (AppUrl::MediaPlayerStart));
-	}
-	else if ((mediaDisplayCount <= 0) && (mediaAvailableCount <= 0)) {
-		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction2Text), HelpWindow::InfoAction, UiText::instance->getText (UiTextId::LearnMore).capitalized (), AppUrl::instance->help (AppUrl::MediaPlayerScan, true), AppUrl::instance->help (AppUrl::MediaPlayerScan));
+	if (! MediaControl::instance->mainOptions.mediaScan) {
+		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction1Text), HelpWindow::InfoAction);
 	}
 	else {
-		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction3Text), HelpWindow::InfoAction);
+		helpWindow->addAction (UiText::instance->getText (UiTextId::PlayerUiHelpAction2Text), HelpWindow::InfoAction);
 	}
 	helpWindow->addTopicLink (UiText::instance->getText (UiTextId::MediaPlayerInterface).capitalized (), StdString (AppUrl::MediaPlayerInterface));
 	helpWindow->addTopicLink (UiText::instance->getText (UiTextId::MediaPlayerWindow).capitalized (), StdString (AppUrl::MediaPlayerWindow));
@@ -1826,6 +2118,18 @@ Widget *PlayerUi::findLuaTargetWidget (const char *targetName) {
 	StdString name;
 	Widget *widget;
 
+	if (appCard && appCard->widgetName.equals (targetName)) {
+		appCard->retain ();
+		return (appCard);
+	}
+	if (mediaOptionWindow && mediaOptionWindow->widgetName.equals (targetName)) {
+		mediaOptionWindow->retain ();
+		return (mediaOptionWindow);
+	}
+	if (mediaFilescanWindow && mediaFilescanWindow->widgetName.equals (targetName)) {
+		mediaFilescanWindow->retain ();
+		return (mediaFilescanWindow);
+	}
 	name.assign (targetName);
 	name.lowercase ();
 	widget = cardView->findItem (findItem_matchMediaName, (char *) name.c_str (), true);
@@ -1858,6 +2162,9 @@ void PlayerUi::executeLuaOpen (Widget *targetWidget) {
 void PlayerUi::executeLuaTarget (Widget *targetWidget) {
 	MediaItemWindow *mediaitem;
 	MediaPlaylistWindow *playlist;
+	AppCardWindow *appcard;
+	MediaOptionWindow *mediaoption;
+	MediaFilescanWindow *mediafilescan;
 
 	mediaitem = MediaItemWindow::castWidget (targetWidget);
 	if (mediaitem) {
@@ -1868,7 +2175,25 @@ void PlayerUi::executeLuaTarget (Widget *targetWidget) {
 	playlist = MediaPlaylistWindow::castWidget (targetWidget);
 	if (playlist) {
 		playlist->setExpanded (true);
-		cardView->scrollToItem (playlist->itemId);
+		cardView->scrollToItem (playlist->playlist.id);
+		return;
+	}
+	appcard = AppCardWindow::castWidget (targetWidget);
+	if (appcard) {
+		appcard->setExpanded (true);
+		cardView->scrollToItem (appcard->itemId);
+		return;
+	}
+	mediaoption = MediaOptionWindow::castWidget (targetWidget);
+	if (mediaoption) {
+		mediaoption->setExpanded (true);
+		cardView->scrollToItem (mediaoption->itemId);
+		return;
+	}
+	mediafilescan = MediaFilescanWindow::castWidget (targetWidget);
+	if (mediafilescan) {
+		mediafilescan->setExpanded (true);
+		cardView->scrollToItem (mediafilescan->itemId);
 		return;
 	}
 }
@@ -1876,6 +2201,9 @@ void PlayerUi::executeLuaTarget (Widget *targetWidget) {
 void PlayerUi::executeLuaUntarget (Widget *targetWidget) {
 	MediaItemWindow *mediaitem;
 	MediaPlaylistWindow *playlist;
+	AppCardWindow *appcard;
+	MediaOptionWindow *mediaoption;
+	MediaFilescanWindow *mediafilescan;
 
 	mediaitem = MediaItemWindow::castWidget (targetWidget);
 	if (mediaitem) {
@@ -1885,6 +2213,21 @@ void PlayerUi::executeLuaUntarget (Widget *targetWidget) {
 	playlist = MediaPlaylistWindow::castWidget (targetWidget);
 	if (playlist) {
 		playlist->setExpanded (false);
+		return;
+	}
+	appcard = AppCardWindow::castWidget (targetWidget);
+	if (appcard) {
+		appcard->setExpanded (false);
+		return;
+	}
+	mediaoption = MediaOptionWindow::castWidget (targetWidget);
+	if (mediaoption) {
+		mediaoption->setExpanded (false);
+		return;
+	}
+	mediafilescan = MediaFilescanWindow::castWidget (targetWidget);
+	if (mediafilescan) {
+		mediafilescan->setExpanded (false);
 		return;
 	}
 }

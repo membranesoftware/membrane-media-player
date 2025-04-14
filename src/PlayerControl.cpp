@@ -173,7 +173,31 @@ int PlayerControl::getPausedPlayerCount () {
 	return (count);
 }
 
-void PlayerControl::playMedia (const StdString &mediaId, int64_t seekTimestamp, bool isDetached) {
+void PlayerControl::playMediaPath (const StdString &playPath, int64_t seekTimestamp, bool isDetached) {
+	PlayerWindow *player;
+
+	if (getPlayerCount () >= PlayerControl::maxPlayerCount) {
+		return;
+	}
+	SDL_LockMutex (playersMutex);
+	unmaximizePlayers ();
+	SDL_UnlockMutex (playersMutex);
+	if (! isDetached) {
+		if ((! mainPlayer) || mainPlayer->isDestroyed) {
+			mainPlayerHandle.assign (createPlayerWindow (false));
+		}
+		player = mainPlayer;
+	}
+	else {
+		player = createPlayerWindow (true);
+	}
+	player->setPlayTargetPath (playPath);
+	player->setPlaySeekTimestamp (seekTimestamp);
+	player->play ();
+	assignPlayerPositions (true);
+}
+
+void PlayerControl::playMediaItem (const StdString &mediaId, int64_t seekTimestamp, bool isDetached) {
 	PlayerWindow *player;
 
 	if (getPlayerCount () >= PlayerControl::maxPlayerCount) {

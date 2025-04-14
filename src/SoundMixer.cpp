@@ -34,6 +34,7 @@
 #include "App.h"
 #include "SdlUtil.h"
 #include "OsUtil.h"
+#include "PrefsKey.h"
 #include "Log.h"
 #include "SharedBuffer.h"
 #include "HashMap.h"
@@ -170,7 +171,7 @@ OpResult SoundMixer::start () {
 	SDL_AudioSpec desired, obtained;
 
 	prefs = App::instance->lockPrefs ();
-	masterMixVolume = prefs->find (App::soundVolumeKey, SoundMixer::maxMixVolume);
+	masterMixVolume = prefs->find (PrefsKey::soundVolume, SoundMixer::maxMixVolume);
 	App::instance->unlockPrefs ();
 
 	outputSampleRate = defaultOutputSampleRate;

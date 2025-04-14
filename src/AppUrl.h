@@ -48,7 +48,6 @@ public:
 	// Help topic strings
 	static constexpr const char *HelpIndex = "";
 	static constexpr const char *AboutApplication = "about-membrane-media-player";
-	static constexpr const char *MediaPlayerStart = "media-player-start";
 	static constexpr const char *MediaPlayerScan = "media-player-scan";
 	static constexpr const char *MediaPlayerInterface = "media-player-interface";
 	static constexpr const char *MediaPlayerWindow = "media-player-window";

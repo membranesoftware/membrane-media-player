@@ -50,10 +50,15 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::PlayerUi_breadcrumbIcon);
 	s.push_back (SpriteId::PlayerUi_createPlaylistButton);
 	s.push_back (SpriteId::PlayerUi_fullscreenButton);
+	s.push_back (SpriteId::PlayerUi_largeMediaOptionIcon);
 	s.push_back (SpriteId::PlayerUi_layoutButton);
 	s.push_back (SpriteId::PlayerUi_mediaScanIcon);
+	s.push_back (SpriteId::PlayerUi_navigateButton);
+	s.push_back (SpriteId::PlayerUi_playMediaButton);
+	s.push_back (SpriteId::PlayerUi_primeButton);
 	s.push_back (SpriteId::PlayerUi_searchButton);
 	s.push_back (SpriteId::PlayerUi_searchStatusIcon);
+	s.push_back (SpriteId::PlayerUi_smallMediaOptionIcon);
 	s.push_back (SpriteId::PlayerUi_sortButton);
 	s.push_back (SpriteId::PlayerUi_stopButton);
 	s.push_back (SpriteId::PlayerUi_tagButton);
@@ -69,7 +74,6 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_cancelButton);
 	s.push_back (SpriteId::SpriteGroup_checkmark);
 	s.push_back (SpriteId::SpriteGroup_cleanButton);
-	s.push_back (SpriteId::SpriteGroup_clearListButton);
 	s.push_back (SpriteId::SpriteGroup_clearTextButton);
 	s.push_back (SpriteId::SpriteGroup_consoleIcon);
 	s.push_back (SpriteId::SpriteGroup_deleteButton);
@@ -112,16 +116,15 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_playlistItemIcon);
 	s.push_back (SpriteId::SpriteGroup_pointerIcon);
 	s.push_back (SpriteId::SpriteGroup_randomizeButton);
-	s.push_back (SpriteId::SpriteGroup_renameButton);
 	s.push_back (SpriteId::SpriteGroup_rewindButton);
 	s.push_back (SpriteId::SpriteGroup_scrollDownArrow);
 	s.push_back (SpriteId::SpriteGroup_scrollUpArrow);
 	s.push_back (SpriteId::SpriteGroup_selectImageSizeButton);
-	s.push_back (SpriteId::SpriteGroup_settingsBoxButton);
 	s.push_back (SpriteId::SpriteGroup_settingsGearButton);
 	s.push_back (SpriteId::SpriteGroup_shuffleIcon);
 	s.push_back (SpriteId::SpriteGroup_skipNextButton);
 	s.push_back (SpriteId::SpriteGroup_skipPreviousButton);
+	s.push_back (SpriteId::SpriteGroup_smallComputerIcon);
 	s.push_back (SpriteId::SpriteGroup_smallErrorIcon);
 	s.push_back (SpriteId::SpriteGroup_smallLoadingIcon);
 	s.push_back (SpriteId::SpriteGroup_smallMediaIcon);
@@ -130,9 +133,7 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_smallStreamIcon);
 	s.push_back (SpriteId::SpriteGroup_soundOffButton);
 	s.push_back (SpriteId::SpriteGroup_soundOnButton);
-	s.push_back (SpriteId::SpriteGroup_starButton);
 	s.push_back (SpriteId::SpriteGroup_starHalfButton);
-	s.push_back (SpriteId::SpriteGroup_starOutlineButton);
 	s.push_back (SpriteId::SpriteGroup_startPositionIcon);
 	s.push_back (SpriteId::SpriteGroup_storageIcon);
 	s.push_back (SpriteId::SpriteGroup_subtitleOffButton);
@@ -140,7 +141,6 @@ StringList SpriteId::getSpriteIds () {
 	s.push_back (SpriteId::SpriteGroup_tagIcon);
 	s.push_back (SpriteId::SpriteGroup_taskInProgressIcon);
 	s.push_back (SpriteId::SpriteGroup_toggleCheckbox);
-	s.push_back (SpriteId::SpriteGroup_toggleCheckboxIndeterminate);
 	s.push_back (SpriteId::SpriteGroup_toggleCheckboxOutline);
 	s.push_back (SpriteId::SpriteGroup_updateButton);
 	s.push_back (SpriteId::SpriteGroup_updateIcon);
@@ -194,17 +194,32 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	if (StdString (SpriteId::PlayerUi_fullscreenButton).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_fullscreenButton);
 	}
+	if (StdString (SpriteId::PlayerUi_largeMediaOptionIcon).startsWith (prefix)) {
+		s.push_back (SpriteId::PlayerUi_largeMediaOptionIcon);
+	}
 	if (StdString (SpriteId::PlayerUi_layoutButton).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_layoutButton);
 	}
 	if (StdString (SpriteId::PlayerUi_mediaScanIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_mediaScanIcon);
 	}
+	if (StdString (SpriteId::PlayerUi_navigateButton).startsWith (prefix)) {
+		s.push_back (SpriteId::PlayerUi_navigateButton);
+	}
+	if (StdString (SpriteId::PlayerUi_playMediaButton).startsWith (prefix)) {
+		s.push_back (SpriteId::PlayerUi_playMediaButton);
+	}
+	if (StdString (SpriteId::PlayerUi_primeButton).startsWith (prefix)) {
+		s.push_back (SpriteId::PlayerUi_primeButton);
+	}
 	if (StdString (SpriteId::PlayerUi_searchButton).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_searchButton);
 	}
 	if (StdString (SpriteId::PlayerUi_searchStatusIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_searchStatusIcon);
+	}
+	if (StdString (SpriteId::PlayerUi_smallMediaOptionIcon).startsWith (prefix)) {
+		s.push_back (SpriteId::PlayerUi_smallMediaOptionIcon);
 	}
 	if (StdString (SpriteId::PlayerUi_sortButton).startsWith (prefix)) {
 		s.push_back (SpriteId::PlayerUi_sortButton);
@@ -250,9 +265,6 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	}
 	if (StdString (SpriteId::SpriteGroup_cleanButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_cleanButton);
-	}
-	if (StdString (SpriteId::SpriteGroup_clearListButton).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_clearListButton);
 	}
 	if (StdString (SpriteId::SpriteGroup_clearTextButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_clearTextButton);
@@ -380,9 +392,6 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	if (StdString (SpriteId::SpriteGroup_randomizeButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_randomizeButton);
 	}
-	if (StdString (SpriteId::SpriteGroup_renameButton).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_renameButton);
-	}
 	if (StdString (SpriteId::SpriteGroup_rewindButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_rewindButton);
 	}
@@ -395,9 +404,6 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	if (StdString (SpriteId::SpriteGroup_selectImageSizeButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_selectImageSizeButton);
 	}
-	if (StdString (SpriteId::SpriteGroup_settingsBoxButton).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_settingsBoxButton);
-	}
 	if (StdString (SpriteId::SpriteGroup_settingsGearButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_settingsGearButton);
 	}
@@ -409,6 +415,9 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	}
 	if (StdString (SpriteId::SpriteGroup_skipPreviousButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_skipPreviousButton);
+	}
+	if (StdString (SpriteId::SpriteGroup_smallComputerIcon).startsWith (prefix)) {
+		s.push_back (SpriteId::SpriteGroup_smallComputerIcon);
 	}
 	if (StdString (SpriteId::SpriteGroup_smallErrorIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_smallErrorIcon);
@@ -434,14 +443,8 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	if (StdString (SpriteId::SpriteGroup_soundOnButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_soundOnButton);
 	}
-	if (StdString (SpriteId::SpriteGroup_starButton).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_starButton);
-	}
 	if (StdString (SpriteId::SpriteGroup_starHalfButton).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_starHalfButton);
-	}
-	if (StdString (SpriteId::SpriteGroup_starOutlineButton).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_starOutlineButton);
 	}
 	if (StdString (SpriteId::SpriteGroup_startPositionIcon).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_startPositionIcon);
@@ -463,9 +466,6 @@ StringList SpriteId::getSpriteIds (const StdString &prefix) {
 	}
 	if (StdString (SpriteId::SpriteGroup_toggleCheckbox).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_toggleCheckbox);
-	}
-	if (StdString (SpriteId::SpriteGroup_toggleCheckboxIndeterminate).startsWith (prefix)) {
-		s.push_back (SpriteId::SpriteGroup_toggleCheckboxIndeterminate);
 	}
 	if (StdString (SpriteId::SpriteGroup_toggleCheckboxOutline).startsWith (prefix)) {
 		s.push_back (SpriteId::SpriteGroup_toggleCheckboxOutline);

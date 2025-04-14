@@ -1358,6 +1358,7 @@ void Video::doDraw (double originX, double originY) {
 	SDL_Texture *texture;
 	int texturew, textureh;
 	bool found;
+	double alpha;
 
 	rect.x = (int) (originX + position.x);
 	rect.y = (int) (originY + position.y);
@@ -1374,15 +1375,20 @@ void Video::doDraw (double originX, double originY) {
 		SDL_RenderCopy (App::instance->render, renderTexture, NULL, &rect);
 	}
 	else {
+		alpha = drawAlpha;
 		if (fillBgColor.aByte < 255) {
+			alpha *= ((double) fillBgColor.aByte) / 255.0f;
+		}
+
+		if (alpha < 1.0f) {
 			SDL_SetRenderDrawBlendMode (App::instance->render, SDL_BLENDMODE_BLEND);
 		}
 		else {
 			SDL_SetRenderDrawBlendMode (App::instance->render, SDL_BLENDMODE_NONE);
 		}
-		SDL_SetRenderDrawColor (App::instance->render, fillBgColor.rByte, fillBgColor.gByte, fillBgColor.bByte, fillBgColor.aByte);
+		SDL_SetRenderDrawColor (App::instance->render, fillBgColor.rByte, fillBgColor.gByte, fillBgColor.bByte, (Uint8) (alpha * 255.0f));
 		SDL_RenderFillRect (App::instance->render, &rect);
-		if (fillBgColor.aByte < 255) {
+		if (alpha < 1.0f) {
 			SDL_SetRenderDrawBlendMode (App::instance->render, SDL_BLENDMODE_NONE);
 		}
 

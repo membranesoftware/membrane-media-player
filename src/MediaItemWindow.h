@@ -41,7 +41,6 @@
 
 class Json;
 class Sprite;
-class Label;
 class LabelWindow;
 class ImageWindow;
 class Button;
@@ -58,13 +57,15 @@ public:
 	Widget::EventCallbackContext mediaImageClickCallback;
 	Widget::EventCallbackContext viewButtonClickCallback;
 	Widget::EventCallbackContext selectStateChangeCallback;
+	bool isTagEnabled;
+	bool isPlayMarkerEnabled;
 
 	// Read-only data members
 	StdString mediaId;
 	MediaItem mediaItem;
+	bool isLoadWaiting;
 	bool isPlayable;
 	bool isSelected;
-	int64_t playTimestamp;
 
 	// Set the window's select state, then execute any select state change callback that might be configured unless shouldSkipStateChangeCallback is true
 	void setSelected (bool selected, bool shouldSkipStateChangeCallback = false);
@@ -72,23 +73,22 @@ public:
 	// Set the play position targeted by the window
 	void setPlayTimestamp (int64_t timestamp);
 
-	// Return a boolean value indicating if the window is configured to load thumbnail images
-	bool hasThumbnails ();
-
 	// Superclass override methods
-	virtual void syncRecordStore ();
 	virtual void refreshDetailSize ();
+	virtual void syncRecordStore ();
 
 protected:
+	// Superclass override methods
+	virtual void doUpdate (int msElapsed);
+
 	// Callback functions
 	static void mediaImageLoaded (void *itPtr, Widget *widgetPtr);
 	static void mediaImageClicked (void *itPtr, Widget *widgetPtr);
 	static void mediaImageLongPressed (void *itPtr, Widget *widgetPtr);
 	static void viewButtonClicked (void *itPtr, Widget *widgetPtr);
 
-	// syncRecordStore functions
-	void syncAudioItem ();
-	void syncVideoItem ();
+	// Reset window elements to reflect the contents of a MediaItem record
+	void readRecord (Json *mediaItemRecord);
 
 	// Populate mediaIconImage with the provided sprite
 	void setMediaIconImage (Sprite *iconSprite);
@@ -99,5 +99,6 @@ protected:
 	LabelWindow *timestampLabel;
 	WidgetHandle<ImageWindow> mediaIconImageHandle;
 	ImageWindow *mediaIconImage;
+	int loadWaitClock;
 };
 #endif

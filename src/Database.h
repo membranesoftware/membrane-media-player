@@ -55,14 +55,17 @@ public:
 	// Clear static instance data
 	static void freeInstance ();
 
-	// Open a connection to the specified database file and return a Result value
+	// Open a connection to the specified database file and return a result value
 	OpResult open (const StdString &dbFilePath);
 
 	// Close a previously opened database connection
 	void close (const StdString &dbFilePath);
 
-	// Execute sql as a command targeting an opened database connection. If errorMessage is provided, set its content to any generated error string.
+	// Execute sql as a command targeting an opened database connection and return a result value. If errorMessage is provided, set its content to any generated error string.
 	OpResult exec (const StdString &dbFilePath, const StdString &sql, StdString *errorMessage = NULL, Database::ExecCallbackFunction callback = NULL, void *callbackData = NULL);
+
+	// Execute a group of sql queries inside a transaction block targeting an opened database connection and return a result value. If errorMessage is provided, set its content to any generated error string.
+	OpResult execTransaction (const StdString &dbFilePath, const StringList &sql, StdString *errorMessage = NULL);
 
 	// Return a string representation of a column value for use in an SQL statement
 	static StdString getColumnValueSql (const StdString &value);

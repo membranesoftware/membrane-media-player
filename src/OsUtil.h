@@ -124,8 +124,9 @@ public:
 	static Buffer *readFile (const StdString &path);
 
 	typedef OpResult (*ReadFileLinesCallback) (void *data, const StdString &line);
-	// Read the file at the specified path, invoke the provided callback with text preceding each newline, and return a result value
+	// Read the file at the specified path or SDL_RWops, invoke the provided callback with text preceding each newline, and return a result value
 	static OpResult readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength = 65536);
+	static OpResult readFileLines (SDL_RWops *rw, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength = 65536);
 
 	// Write file data to the specified path and return a Result value. If freeWriteData is true, free the writeData buffer.
 	static OpResult writeFile (const StdString &path, Buffer *writeData, bool freeWriteData = true);

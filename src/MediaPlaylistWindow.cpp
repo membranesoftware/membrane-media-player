@@ -41,8 +41,12 @@
 #include "SpriteGroup.h"
 #include "TaskGroup.h"
 #include "Json.h"
+#include "HashMap.h"
 #include "RecordStore.h"
+#include "SystemInterface.h"
+#include "Database.h"
 #include "MediaControl.h"
+#include "MediaItem.h"
 #include "Font.h"
 #include "Label.h"
 #include "LabelWindow.h"
@@ -69,7 +73,6 @@ MediaPlaylistWindow::MediaPlaylistWindow ()
 , isExecuting (false)
 , isShowingSettings (false)
 , playerHandle (&player)
-, isLoadingRecords (false)
 , currentPlayItemIndex (-1)
 , currentPlayDuration (0)
 , nextPlayIndex (-1)
@@ -79,7 +82,6 @@ MediaPlaylistWindow::MediaPlaylistWindow ()
 , shouldScrollOnPlay (false)
 {
 	classId = ClassId::MediaPlaylistWindow;
-	SdlUtil::createMutex (&loadMutex);
 	setCornerRadius (UiConfiguration::instance->cornerRadius);
 	setFillBg (true, UiConfiguration::instance->mediumBackgroundColor);
 	setPaddingScale (0.5f, 0.5f);
@@ -206,17 +208,13 @@ MediaPlaylistWindow::MediaPlaylistWindow ()
 }
 MediaPlaylistWindow::~MediaPlaylistWindow () {
 	if (player && (! player->isDestroyed)) {
-		if (player->playlistId.equals (itemId)) {
+		if (player->playlistId.equals (playlist.id)) {
 			player->playlistId.assign ("");
 		}
 	}
 
-	SDL_LockMutex (loadMutex);
 	RecordStore::instance->remove (mediaItemIds);
 	mediaItemIds.clear ();
-	SDL_UnlockMutex (loadMutex);
-
-	SdlUtil::destroyMutex (&loadMutex);
 }
 
 MediaPlaylistWindow *MediaPlaylistWindow::castWidget (Widget *widget) {
@@ -224,7 +222,7 @@ MediaPlaylistWindow *MediaPlaylistWindow::castWidget (Widget *widget) {
 }
 
 void MediaPlaylistWindow::resetPlaylistId () {
-	playlist.id = RecordStore::instance->getRecordId (MediaPlaylist::idCommandType);
+	playlist.resetId ();
 }
 
 void MediaPlaylistWindow::setPlaylistName (const StdString &name) {
@@ -318,83 +316,116 @@ void MediaPlaylistWindow::setShowingSettings (bool showing) {
 	reflow ();
 }
 
-void MediaPlaylistWindow::read (const MediaPlaylist &mediaPlaylist) {
+void MediaPlaylistWindow::read (const MediaPlaylist &sourcePlaylist) {
 	std::vector<MediaPlaylistItem>::const_iterator i1, i2;
 
-	SDL_LockMutex (loadMutex);
 	RecordStore::instance->remove (mediaItemIds);
 	mediaItemIds.clear ();
-	SDL_UnlockMutex (loadMutex);
 
 	playlist.clear ();
-	playlist.id = mediaPlaylist.id;
-	playlist.isExpanded = mediaPlaylist.isExpanded;
-	playlist.isShuffle = mediaPlaylist.isShuffle;
-	playlist.startPosition = mediaPlaylist.startPosition;
-	playlist.playDuration = mediaPlaylist.playDuration;
+	playlist.id.assign (sourcePlaylist.id);
+	playlist.isExpanded = sourcePlaylist.isExpanded;
+	playlist.isShuffle = sourcePlaylist.isShuffle;
+	playlist.startPosition = sourcePlaylist.startPosition;
+	playlist.playDuration = sourcePlaylist.playDuration;
 	shuffleToggle->setChecked (playlist.isShuffle, true);
 	startPositionSlider->setValue (playlist.startPosition, true);
 	playDurationSlider->setValue (playlist.playDuration, true);
-	setPlaylistName (mediaPlaylist.name);
+	setPlaylistName (sourcePlaylist.name);
 	if (isExpanded != playlist.isExpanded) {
 		setExpanded (playlist.isExpanded, true);
 	}
 
 	view->clearItems ();
-	i1 = mediaPlaylist.items.cbegin ();
-	i2 = mediaPlaylist.items.cend ();
+	i1 = sourcePlaylist.items.cbegin ();
+	i2 = sourcePlaylist.items.cend ();
 	while (i1 != i2) {
-		addItem (*i1);
+		playlist.items.push_back (*i1);
+		insertMediaItemRecord (*i1);
+		view->addItem (*i1);
 		++i1;
 	}
-}
 
-void MediaPlaylistWindow::addItem (const StdString &mediaId, int64_t startTimestamp) {
-	addItem (MediaPlaylistItem (mediaId, startTimestamp));
-}
-void MediaPlaylistWindow::addItem (const MediaPlaylistItem &playlistItem) {
-	bool found;
-
-	view->addItem (playlistItem);
-	playlist.items.push_back (playlistItem);
 	resetItemCount ();
 	reflow ();
-
-	found = RecordStore::instance->exists (playlistItem.mediaId, true);
-	SDL_LockMutex (loadMutex);
-	if (found) {
-		mediaItemIds.push_back (playlistItem.mediaId);
-		App::instance->shouldSyncRecordStore = true;
-	}
-	else {
-		loadIds.push_back (playlistItem.mediaId);
-	}
-	SDL_UnlockMutex (loadMutex);
 }
 
-void MediaPlaylistWindow::resetItems (const IntList &indexList) {
+void MediaPlaylistWindow::addItem (const MediaItem &mediaItem) {
+	MediaPlaylistItem item;
+
+	item.readMediaItem (mediaItem);
+	item.resetId ();
+	playlist.items.push_back (item);
+	insertMediaItemRecord (item);
+	view->addItem (item);
+	resetItemCount ();
+	reflow ();
+}
+
+void MediaPlaylistWindow::insertMediaItemRecord (const MediaPlaylistItem &playlistItem) {
+	MediaItem mediaitem;
+	Json *record;
+
+	mediaitem.clear (playlistItem.id);
+	mediaitem.name.assign (playlistItem.name);
+	mediaitem.mediaPath.assign (playlistItem.mediaPath);
+	mediaitem.duration = playlistItem.duration;
+	mediaitem.isVideo = playlistItem.isVideo;
+	mediaitem.isAudio = playlistItem.isAudio;
+	mediaitem.hasAudioAlbumArt = playlistItem.hasAudioAlbumArt;
+	mediaitem.width = playlistItem.width;
+	mediaitem.height = playlistItem.height;
+	mediaitem.playSeekTimestamp = playlistItem.playSeekTimestamp;
+	record = mediaitem.createRecord (MediaControl::instance->agentId);
+	RecordStore::instance->insert (record, true);
+	delete (record);
+	mediaItemIds.push_back (mediaitem.id);
+}
+
+void MediaPlaylistWindow::setItemOrder (const IntList &indexList) {
 	IntList::const_iterator i1, i2;
-	std::vector<MediaPlaylistItem> previtems;
-	StringList previtemids;
-	int index;
+	std::vector<MediaPlaylistItem> nextitems;
+	std::vector<MediaPlaylistItem>::const_iterator j1, j2;
+	StdString id;
+	StringList nextitemids, removeids;
+	HashMap idmap;
+	int prevcount, index;
 
-	SDL_LockMutex (loadMutex);
-	previtemids.swap (mediaItemIds);
-	SDL_UnlockMutex (loadMutex);
-
-	previtems.swap (playlist.items);
-	view->clearItems ();
+	prevcount = (int) playlist.items.size ();
 	i1 = indexList.cbegin ();
 	i2 = indexList.cend ();
 	while (i1 != i2) {
 		index = *i1;
-		if ((index >= 0) && (index < (int) previtems.size ())) {
-			addItem (previtems.at (index));
+		if ((index >= 0) && (index < prevcount)) {
+			id.assign (playlist.items.at (index).id);
+			nextitems.push_back (playlist.items.at (index));
+			nextitemids.push_back (id);
+			idmap.insert (id, true);
 		}
 		++i1;
 	}
 
-	RecordStore::instance->remove (previtemids);
+	j1 = playlist.items.cbegin ();
+	j2 = playlist.items.cend ();
+	while (j1 != j2) {
+		if (! idmap.exists (j1->id)) {
+			removeids.push_back (j1->id);
+		}
+		++j1;
+	}
+	playlist.items.swap (nextitems);
+	view->clearItems ();
+	j1 = playlist.items.cbegin ();
+	j2 = playlist.items.cend ();
+	while (j1 != j2) {
+		view->addItem (*j1);
+		++j1;
+	}
+
+	if (! removeids.empty ()) {
+		RecordStore::instance->remove (removeids);
+	}
+	mediaItemIds.swap (nextitemids);
 	resetItemCount ();
 	reflow ();
 }
@@ -482,55 +513,35 @@ void MediaPlaylistWindow::doResize () {
 }
 
 void MediaPlaylistWindow::doUpdate (int msElapsed) {
-	int count;
-
 	playerHandle.compact ();
 	updatePlay (msElapsed);
 	Panel::doUpdate (msElapsed);
+}
 
-	if (! isLoadingRecords) {
-		SDL_LockMutex (loadMutex);
-		count = (int) loadIds.size ();
-		SDL_UnlockMutex (loadMutex);
-		if (count > 0) {
-			isLoadingRecords = true;
-			retain ();
-			TaskGroup::instance->run (TaskGroup::RunContext (MediaPlaylistWindow::loadRecords, this));
-		}
+void MediaPlaylistWindow::writeRecord () {
+	StringList sql;
+
+	if (! MediaControl::instance->mainOptions.savePlaylists) {
+		return;
+	}
+	playlist.isExpanded = isExpanded;
+	playlist.getUpsertSql (MediaControl::playlistTableName, &sql);
+	if (! sql.empty ()) {
+		MediaControl::instance->execDatabase (sql);
 	}
 }
 
-void MediaPlaylistWindow::loadRecords (void *itPtr) {
-	MediaPlaylistWindow *it = (MediaPlaylistWindow *) itPtr;
+void MediaPlaylistWindow::removeRecord () {
+	StringList sql;
 
-	it->executeLoadRecords ();
-	it->isLoadingRecords = false;
-	it->release ();
-}
-void MediaPlaylistWindow::executeLoadRecords () {
-	StringList ids;
-	StringList::const_iterator i1, i2;
-	StdString errmsg;
-	MediaItem mediaitem;
-	Json *record;
-
-	SDL_LockMutex (loadMutex);
-	ids.swap (loadIds);
-	SDL_UnlockMutex (loadMutex);
-	i1 = ids.cbegin ();
-	i2 = ids.cend ();
-	while (i1 != i2) {
-		if (mediaitem.readDatabaseMediaIdRow (MediaControl::instance->databasePath, &errmsg, *i1)) {
-			record = mediaitem.createRecord (MediaControl::instance->agentId);
-			RecordStore::instance->insert (record, true);
-			delete (record);
-
-			SDL_LockMutex (loadMutex);
-			mediaItemIds.push_back (*i1);
-			SDL_UnlockMutex (loadMutex);
-			App::instance->shouldSyncRecordStore = true;
-		}
-		++i1;
+	RecordStore::instance->remove (mediaItemIds);
+	mediaItemIds.clear ();
+	if (! MediaControl::instance->mainOptions.savePlaylists) {
+		return;
+	}
+	playlist.getDeleteSql (MediaControl::playlistTableName, &sql);
+	if (! sql.empty ()) {
+		MediaControl::instance->execDatabase (sql);
 	}
 }
 
@@ -743,15 +754,12 @@ void MediaPlaylistWindow::settingsButtonClicked (void *itPtr, Widget *widgetPtr)
 void MediaPlaylistWindow::addItemButtonClicked (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistWindow *) itPtr)->eventCallback (((MediaPlaylistWindow *) itPtr)->addItemClickCallback);
 }
-
 void MediaPlaylistWindow::addItemButtonFocused (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistWindow *) itPtr)->eventCallback (((MediaPlaylistWindow *) itPtr)->addItemFocusCallback);
 }
-
 void MediaPlaylistWindow::addItemButtonUnfocused (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistWindow *) itPtr)->eventCallback (((MediaPlaylistWindow *) itPtr)->addItemUnfocusCallback);
 }
-
 void MediaPlaylistWindow::editButtonClicked (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistWindow *) itPtr)->eventCallback (((MediaPlaylistWindow *) itPtr)->editClickCallback);
 }
@@ -827,7 +835,7 @@ void MediaPlaylistWindow::viewItemClicked (void *itPtr, Widget *widgetPtr) {
 
 void MediaPlaylistWindow::play (PlayerWindow *playerWindow) {
 	playerHandle.assign (playerWindow);
-	player->playlistId.assign (itemId);
+	player->playlistId.assign (playlist.id);
 	isExecuting = true;
 	if (! isExpanded) {
 		topItemCountLabel->isVisible = (! isExecuting);
@@ -842,7 +850,6 @@ void MediaPlaylistWindow::play (PlayerWindow *playerWindow) {
 
 void MediaPlaylistWindow::updatePlay (int msElapsed) {
 	MediaPlaylistItem playlistitem;
-	MediaItem mediaitem;
 	int playindex, minpct, maxpct;
 	int64_t minduration, maxduration, seekts;
 	double pct, delta;
@@ -854,7 +861,7 @@ void MediaPlaylistWindow::updatePlay (int msElapsed) {
 		endPlay ();
 		return;
 	}
-	if (! player->playlistId.equals (itemId)) {
+	if (! player->playlistId.equals (playlist.id)) {
 		endPlay ();
 		return;
 	}
@@ -913,25 +920,28 @@ void MediaPlaylistWindow::updatePlay (int msElapsed) {
 		}
 
 		playlistitem = playlist.items.at (currentPlayItemIndex);
-		seekts = playlistitem.startTimestamp;
+		seekts = playlistitem.playSeekTimestamp;
 		pct = 0.0f;
 		playlist.getStartPositionRange (&minpct, &maxpct);
 		if ((minpct > 0) || (maxpct > 0)) {
-			if (mediaitem.readRecordStore (playlistitem.mediaId) && (mediaitem.duration > 0)) {
-				delta = (double) (mediaitem.duration - playlistitem.startTimestamp);
-				pct = Prng::instance->getRandomNumber ((double) minpct, (double) maxpct);
-				seekts += (int64_t) (pct / 100.0f * delta);
+			if (playlistitem.duration > 0) {
+				delta = (double) (playlistitem.duration - playlistitem.playSeekTimestamp);
+				if (delta > 0.0f) {
+					pct = Prng::instance->getRandomNumber ((double) minpct, (double) maxpct);
+					seekts += (int64_t) (pct / 100.0f * delta);
+				}
 			}
 		}
 		playStatusLabel->setText (StdString::createSprintf ("%i/%i", currentPlayItemIndex + 1, (int) playlist.items.size ()));
-		player->setPlayMedia (playlistitem.mediaId);
+
+		player->setPlayMedia (playlistitem.id);
 		player->setPlaySeekTimestamp (seekts);
 		player->play ();
 	}
 }
 void MediaPlaylistWindow::endPlay () {
 	if (player && (! player->isDestroyed)) {
-		if (player->playlistId.equals (itemId)) {
+		if (player->playlistId.equals (playlist.id)) {
 			player->playlistId.assign ("");
 		}
 	}
@@ -951,7 +961,6 @@ void MediaPlaylistWindow::endPlay () {
 
 void MediaPlaylistWindow::resetPlayItemIds () {
 	std::vector<MediaPlaylistItem>::const_iterator i1, i2;
-	bool found;
 	int index, nextindex;
 
 	playItemIndexes.clear ();
@@ -961,17 +970,9 @@ void MediaPlaylistWindow::resetPlayItemIds () {
 	i1 = playlist.items.cbegin ();
 	i2 = playlist.items.cend ();
 	while (i1 != i2) {
-		found = false;
-		SDL_LockMutex (loadMutex);
-		if (mediaItemIds.contains (i1->mediaId)) {
-			found = true;
-		}
-		SDL_UnlockMutex (loadMutex);
-		if (found) {
-			playItemIndexes.push_back (index);
-			if ((nextindex < 0) && (nextPlayIndex >= 0) && (index == nextPlayIndex)) {
-				nextindex = ((int) playItemIndexes.size ()) - 1;
-			}
+		playItemIndexes.push_back (index);
+		if ((nextindex < 0) && (nextPlayIndex >= 0) && (index == nextPlayIndex)) {
+			nextindex = ((int) playItemIndexes.size ()) - 1;
 		}
 		++index;
 		++i1;

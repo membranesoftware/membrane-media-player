@@ -180,6 +180,12 @@ OpResult HashMap::read (const StdString &filename, bool shouldClear) {
 	}
 	return (OsUtil::readFileLines (filename, HashMap::readLine, this));
 }
+OpResult HashMap::read (SDL_RWops *rw, bool shouldClear) {
+	if (shouldClear) {
+		clear ();
+	}
+	return (OsUtil::readFileLines (rw, HashMap::readLine, this));
+}
 OpResult HashMap::readLine (void *itPtr, const StdString &line) {
 	HashMap *it = (HashMap *) itPtr;
 	StdString text, key, val;

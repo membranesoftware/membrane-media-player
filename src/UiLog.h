@@ -34,6 +34,8 @@
 #ifndef UI_LOG_H
 #define UI_LOG_H
 
+class StringList;
+
 class UiLog {
 public:
 	UiLog ();
@@ -46,14 +48,28 @@ public:
 	// Clear static instance data
 	static void freeInstance ();
 
-	static constexpr const char *databaseName = "log.db";
+	static constexpr const int NoOptions = 0;
 
 	// Read-only data members
-	bool isReady;
-	StdString databasePath;
-	int maxMessageAge;
-	int lastMessageLine;
-	bool isClearing;
+	int nextMessageLine;
+	int64_t logSize;
+	int64_t maxLogSize;
+
+	// Remove all stored log messages
+	void clear ();
+
+	// Set the line number value to apply when writing the next message
+	void setNextMessageLine (int line);
+
+	// Set the maximum text size to hold in message entries, or disable max log size if maxLogSizeValue is zero or less.
+	void setMaxLogSize (int64_t maxLogSizeValue);
+
+	// Write a message to the log using the provided format string and va_list
+	void voutput (int options, const char *str, va_list args);
+
+	// Write a message to the static UiLog instance
+	static void write (int options, const char *str, ...) __attribute__((format(printf, 2, 3)));
+	static void write (int options, const char *str, va_list args);
 
 	struct Message {
 		int line;
@@ -65,51 +81,56 @@ public:
 			createTime (0),
 			options (0) { }
 	};
+	typedef void (*ProcessMessageFunction) (void *data, const UiLog::Message &message);
+	// Execute processFn for each stored message
+	void processMessages (UiLog::ProcessMessageFunction processFn, void *processFnData);
 
-	// Update state as appropriate for an elapsed millisecond time period
-	void update (int msElapsed);
+	typedef void (*MessageCallback) (void *data, const UiLog::Message &message);
+	// Set a callback function to be invoked when a new message is received
+	void addListener (void *callbackData, UiLog::MessageCallback addMessageCallback);
 
-	// Change the log configuration. maxMessageAgeValue is specified as a number of seconds, with a negative value indicating that no max message age should apply.
-	void configure (const StdString &databasePathValue, int maxMessageAgeValue = -1);
+	// Remove previously added message callbacks
+	void removeListener (void *callbackData);
 
-	// Change the log database path, reopen the database connection, and return a result value
-	OpResult setDatabasePath (const StdString &databasePathValue);
+	// Read log contents from the specified database path and return true if the load succeeded
+	bool loadMessages (const StdString &databasePath, const char *tableName, StdString *errorMessage);
+	static int loadMessages_row (void *itPtr, int columnCount, char **columnValues, char **columnNames);
+	void appendLoadMessage (const UiLog::Message &msg);
 
-	// Remove all stored log messages
-	void clear ();
+	// Return an SQL CREATE TABLE statement that creates a table of message records
+	static StdString getCreateTableSql (const char *tableName);
 
-	// Write a message to the log using the provided format string and va_list
-	void voutput (int options, const char *str, va_list args);
+	// Generate SQL statements to insert a message record and append them to destList
+	static void getInsertMessageSql (const UiLog::Message &message, const char *tableName, StringList *destList);
 
-	// Write a message to the log
-	static void write (int options, const char *str, ...) __attribute__((format(printf, 2, 3)));
-	static void write (int options, const char *str, va_list args);
+	// Read Message records from the database and add them to destList, clearing the list before doing so. Return true if the operation succeeded.
+	static bool readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<UiLog::Message> *destList, int offset = 0, int limit = 0);
+	static int readDatabaseRows_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames);
 
-	// Read message records from the database and add them to destList, clearing the list before doing so. Returns true if the operation succeeded.
-	bool readRecords (StdString *errorMessage, std::list<UiLog::Message> *destList, int messageLine, int direction, int limit = -1);
-	static int readRecords_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames);
-
-	// Return the maximum line value among stored records, or -1 if a database error occurred
-	int readMaxMessageLine (StdString *errorMessage);
-
-	// Remove records with age exceeding the configured maxMessageAge value
-	bool removeMaxAgeRecords (StdString *errorMessage);
+	// Set Message fields by reading values from a database row and return true if the operation succeeded
+	static bool copyDatabaseRowValues (UiLog::Message *destMessage, int columnCount, char **columnValues, char **columnNames);
 
 private:
-	// Task functions
-	static void initialize (void *itPtr);
-	OpResult executeInitialize ();
-	static void storeMessageRecords (void *itPtr);
-	void executeStoreMessageRecords ();
-	static void removeAllRecords (void *itPtr);
-	void executeRemoveAllRecords ();
+	SDL_mutex *messageListMutex;
+	std::list<UiLog::Message> messageList;
 
-	// Open the log's database connection and return a result value
-	OpResult openDatabase ();
+	struct MessageCallbackContext {
+		void *callbackData;
+		UiLog::MessageCallback addMessageCallback;
+		MessageCallbackContext ():
+			callbackData (NULL),
+			addMessageCallback (NULL) { }
+		MessageCallbackContext (void *callbackData, UiLog::MessageCallback addMessageCallback):
+			callbackData (callbackData),
+			addMessageCallback (addMessageCallback) { }
+	};
+	SDL_mutex *callbackListMutex;
+	std::list<UiLog::MessageCallbackContext> callbackList;
 
-	int stage;
-	bool isDatabaseOpen;
-	SDL_mutex *writeMessageListMutex;
-	std::list<UiLog::Message> writeMessageList;
+	std::list<UiLog::Message> loadMessageList;
+	int loadMessageMaxLine;
+	int loadMessageTrimLine;
+	int64_t loadMessageLogSize;
+	int64_t loadMessageMaxLogSize;
 };
 #endif

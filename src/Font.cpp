@@ -34,6 +34,7 @@
 #include "ft2build.h"
 #include FT_FREETYPE_H
 #include "Log.h"
+#include "Buffer.h"
 #include "Resource.h"
 #include "RenderResource.h"
 #include "Font.h"
@@ -83,6 +84,9 @@ OpResult Font::load (Buffer *fontData, int pointSize) {
 	Uint32 *pixels, *dest, color, rmask, gmask, bmask, amask;
 	std::map<char, Font::Glyph>::iterator i1, i2;
 
+	if (pointSize <= 0) {
+		return (OpResult::InvalidParamError);
+	}
 	result = FT_New_Memory_Face (freetype, (FT_Byte *) fontData->data, fontData->length, 0, &face);
 	if (result != 0) {
 		Log::err ("Failed to load font; name=\"%s\" err=\"FT_New_Memory_Face: %i\"", name.c_str (), result);

@@ -110,19 +110,27 @@ O=\
 	MathUtil.o \
 	MediaControl.o \
 	MediaControlSearch.o \
-	MediaControlWindow.o \
+	MediaControlTask.o \
+	MediaControlTaskWindow.o \
+	MediaFilescanCleanWindow.o \
+	MediaFilescanConfigureWindow.o \
+	MediaFilescanRunWindow.o \
+	MediaFilescanStatusWindow.o \
+	MediaFilescanWindow.o \
 	MediaItem.o \
 	MediaItemDetailWindow.o \
 	MediaItemImageWindow.o \
 	MediaItemTagWindow.o \
 	MediaItemUi.o \
 	MediaItemWindow.o \
+	MediaOptionWindow.o \
 	MediaPlaylist.o \
 	MediaPlaylistUi.o \
 	MediaPlaylistViewWindow.o \
 	MediaPlaylistWindow.o \
 	MediaReader.o \
 	MediaSearch.o \
+	MediaSearchGroup.o \
 	MediaThumbnailWindow.o \
 	MediaUtil.o \
 	MediaWriter.o \
@@ -135,6 +143,7 @@ O=\
 	PlayerTimelineWindow.o \
 	PlayerUi.o \
 	PlayerWindow.o \
+	PlayFileActionWindow.o \
 	PlayMarker.o \
 	Position.o \
 	Prng.o \
@@ -185,6 +194,7 @@ O=\
 	UiStack.o \
 	UiText.o \
 	Video.o \
+	VideoCycleWindow.o \
 	WaveformShader.o \
 	Widget.o
 

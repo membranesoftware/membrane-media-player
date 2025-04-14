@@ -32,9 +32,9 @@
 */
 #include "Config.h"
 #include "App.h"
+#include "SdlUtil.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
-#include "TaskGroup.h"
 #include "Ui.h"
 #include "UiText.h"
 #include "UiConfiguration.h"
@@ -51,21 +51,13 @@
 
 constexpr const double headerImageAspectRatio = 25.0f / 9.0f;
 
-constexpr const int Uninitialized = 0;
-constexpr const int Running = 1;
-constexpr const int LoadMessagesWait1 = 2;
-constexpr const int LoadMessagesWait2 = 3;
-
 UiLogWindow::UiLogWindow (double windowWidth, double windowHeight)
 : Panel ()
 , windowWidth (windowWidth)
 , windowHeight (windowHeight)
-, stage (Uninitialized)
-, isLoadDisabled (false)
-, firstMessageLine (0)
-, lastMessageLine (0)
-, loadErrorIcon (NULL)
+, isMessageListLoaded (false)
 {
+	SdlUtil::createMutex (&messageListMutex);
 	setFixedSize (true, windowWidth, windowHeight);
 	setFillBg (true, UiConfiguration::instance->mediumBackgroundColor);
 
@@ -94,6 +86,16 @@ UiLogWindow::UiLogWindow (double windowWidth, double windowHeight)
 	reflow ();
 }
 UiLogWindow::~UiLogWindow () {
+	UiLog::instance->removeListener (this);
+	SdlUtil::destroyMutex (&messageListMutex);
+}
+
+void UiLogWindow::processMessages_appendMessageListItem (void *itPtr, const UiLog::Message &message) {
+	UiLogWindow *it = (UiLogWindow *) itPtr;
+
+	SDL_LockMutex (it->messageListMutex);
+	it->messageList.push_back (message);
+	SDL_UnlockMutex (it->messageListMutex);
 }
 
 void UiLogWindow::reflow () {
@@ -115,9 +117,6 @@ void UiLogWindow::reflow () {
 		view->processViewItems (UiLogWindow::reflow_processItem, this);
 		view->reflow ();
 	}
-	if (loadErrorIcon) {
-		loadErrorIcon->position.assign (view->position.x + (view->width / 2.0f) - (loadErrorIcon->width / 2.0f), view->position.y + (view->height / 2.0f) - (loadErrorIcon->height / 2.0f));
-	}
 
 	bottomRightLayoutFlow ();
 	closeButton->flowLeft (&layoutFlow);
@@ -130,6 +129,37 @@ void UiLogWindow::reflow_processItem (void *itPtr, Widget *widgetPtr) {
 	textflow->setViewWidth (it->scrollViewWidth);
 }
 
+void UiLogWindow::doUpdate (int msElapsed) {
+	std::list<UiLog::Message> m;
+	std::list<UiLog::Message>::const_iterator i1, i2;
+	StdString text;
+	TextFlow *textflow;
+
+	Panel::doUpdate (msElapsed);
+	if (! isMessageListLoaded) {
+		isMessageListLoaded = true;
+		UiLog::instance->processMessages (UiLogWindow::processMessages_appendMessageListItem, this);
+		UiLog::instance->addListener (this, UiLogWindow::processMessages_appendMessageListItem);
+	}
+	SDL_LockMutex (messageListMutex);
+	messageList.swap (m);
+	SDL_UnlockMutex (messageListMutex);
+	if (! m.empty ()) {
+		i1 = m.cbegin ();
+		i2 = m.cend ();
+		while (i1 != i2) {
+			textflow = new TextFlow (scrollViewWidth, UiConfiguration::ConsoleFont);
+			textflow->setPaddingScale (1.0f, 0.0f);
+			text.sprintf ("[%s] ", UiText::instance->getTimestampText (i1->createTime).c_str ());
+			text.append (i1->text);
+			textflow->setText (text);
+			view->addViewItem (textflow);
+			++i1;
+		}
+		reflow ();
+	}
+}
+
 void UiLogWindow::closeButtonClicked (void *itPtr, Widget *widgetPtr) {
 	((UiLogWindow *) itPtr)->isDestroyed = true;
 }
@@ -137,89 +167,6 @@ void UiLogWindow::closeButtonClicked (void *itPtr, Widget *widgetPtr) {
 void UiLogWindow::clearButtonClicked (void *itPtr, Widget *widgetPtr) {
 	UiLogWindow *it = (UiLogWindow *) itPtr;
 
-	UiLog::instance->clear ();
 	it->view->clearViewItems ();
-	it->firstMessageLine = 0;
-	it->lastMessageLine = 0;
-}
-
-void UiLogWindow::doUpdate (int msElapsed) {
-	Panel::doUpdate (msElapsed);
-	switch (stage) {
-		case Uninitialized: {
-			stage = Running;
-			break;
-		}
-		case Running: {
-			if ((! isLoadDisabled) && (! UiLog::instance->isClearing) && view->isScrolledToBottom ()) {
-				if (UiLog::instance->lastMessageLine > lastMessageLine) {
-					stage = LoadMessagesWait1;
-					retain ();
-					TaskGroup::instance->run (TaskGroup::RunContext (UiLogWindow::loadMessages, this));
-				}
-			}
-			break;
-		}
-		case LoadMessagesWait1: {
-			break;
-		}
-		case LoadMessagesWait2: {
-			if (isLoadDisabled) {
-				if (loadErrorIcon) {
-					loadErrorIcon->isDestroyed = true;
-				}
-				loadErrorIcon = add (new IconLabelWindow (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallErrorIcon), UiText::instance->getText (UiTextId::DataLoadError).capitalized (), UiConfiguration::BodyFont, UiConfiguration::instance->errorTextColor), 1);
-			}
-			reflow ();
-			view->scrollToBottom ();
-			stage = Running;
-			break;
-		}
-	}
-}
-
-void UiLogWindow::loadMessages (void *itPtr) {
-	UiLogWindow *it = (UiLogWindow *) itPtr;
-
-	it->executeLoadMessages ();
-	it->stage = LoadMessagesWait2;
-	it->release ();
-}
-void UiLogWindow::executeLoadMessages () {
-	StdString errmsg;
-	std::list<UiLog::Message> msglist;
-	std::list<UiLog::Message>::const_iterator i1, i2;
-	std::list<TextFlow *> msgitems;
-	std::list<TextFlow *>::const_iterator j1, j2;
-	StdString text;
-	TextFlow *textflow;
-
-	if (! UiLog::instance->readRecords (&errmsg, &msglist, lastMessageLine, 1)) {
-		isLoadDisabled = true;
-		return;
-	}
-	i1 = msglist.cbegin ();
-	i2 = msglist.cend ();
-	while (i1 != i2) {
-		textflow = new TextFlow (scrollViewWidth, UiConfiguration::ConsoleFont);
-		textflow->setPaddingScale (1.0f, 0.0f);
-		text.sprintf ("[%s] ", UiText::instance->getTimestampText (i1->createTime).c_str ());
-		text.append (i1->text);
-		textflow->setText (text);
-
-		msgitems.push_back (textflow);
-		if ((firstMessageLine <= 0) || (i1->line < firstMessageLine)) {
-			firstMessageLine = i1->line;
-		}
-		if ((lastMessageLine <= 0) || (i1->line > lastMessageLine)) {
-			lastMessageLine = i1->line;
-		}
-		++i1;
-	}
-	j1 = msgitems.cbegin ();
-	j2 = msgitems.cend ();
-	while (j1 != j2) {
-		view->addViewItem (*j1);
-		++j1;
-	}
+	it->eventCallback (it->clearCallback);
 }

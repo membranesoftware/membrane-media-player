@@ -39,10 +39,8 @@
 #include "MediaReader.h"
 #include "MediaItem.h"
 
-const StdString MediaItem::createTableSql = StdString ("CREATE TABLE IF NOT EXISTS MediaItem(id TEXT PRIMARY KEY, name TEXT, mediaPath TEXT, mediaDirname TEXT, thumbnailTimestamps TEXT, mtime INTEGER, duration INTEGER, mediaFileSize INTEGER, totalBitrate INTEGER, isVideo INTEGER, isAudio INTEGER, hasAudioAlbumArt INTEGER, frameRate REAL, videoBitrate INTEGER, width INTEGER, height INTEGER, audioSampleRate INTEGER, audioChannels INTEGER, audioBitrate INTEGER, tags TEXT, sortKey TEXT); CREATE UNIQUE INDEX IF NOT EXISTS MediaItemPath ON MediaItem(mediaPath); CREATE INDEX IF NOT EXISTS MediaItemSortKey ON MediaItem(sortKey); CREATE INDEX IF NOT EXISTS MediaItemDirname ON MediaItem(mediaDirname); CREATE INDEX IF NOT EXISTS MediaItemMtime ON MediaItem(mtime);");
 const StdString MediaItem::sortKeyCharacters = StdString ("abcdefghijklmnopqrstuvwxyz0123456789");
-constexpr const char *selectSql = "SELECT id, name, mediaPath, mediaDirname, thumbnailTimestamps, mtime, duration, mediaFileSize, totalBitrate, isVideo, isAudio, hasAudioAlbumArt, frameRate, videoBitrate, width, height, audioSampleRate, audioChannels, audioBitrate, tags, sortKey FROM MediaItem";
-constexpr const int selectColumnCount = 20;
+constexpr const char searchWildcard = '*';
 
 MediaItem::MediaItem ()
 : mtime (0)
@@ -59,18 +57,14 @@ MediaItem::MediaItem ()
 , audioSampleRate (0)
 , audioChannels (0)
 , audioBitrate (0)
+, playSeekTimestamp (0)
 {
 }
 MediaItem::~MediaItem () {
 }
 
-StdString MediaItem::toString () const {
-	StdString s;
-	return (s);
-}
-
 void MediaItem::clear (const StdString &mediaIdValue) {
-	mediaId.assign (mediaIdValue);
+	id.assign (mediaIdValue);
 	agentId.assign ("");
 	name.assign ("");
 	mediaPath.assign ("");
@@ -92,10 +86,11 @@ void MediaItem::clear (const StdString &mediaIdValue) {
 	thumbnailTimestamps.clear ();
 	tags.clear ();
 	sortKey.assign ("");
+	playSeekTimestamp = 0;
 }
 
 void MediaItem::copyValues (const MediaItem &source) {
-	mediaId.assign (source.mediaId);
+	id.assign (source.id);
 	agentId.assign (source.agentId);
 	name.assign (source.name);
 	mediaPath.assign (source.mediaPath);
@@ -117,6 +112,7 @@ void MediaItem::copyValues (const MediaItem &source) {
 	thumbnailTimestamps.assign (source.thumbnailTimestamps);
 	tags.assign (source.tags);
 	sortKey.assign (source.sortKey);
+	playSeekTimestamp = source.playSeekTimestamp;
 }
 
 bool MediaItem::isValid () const {
@@ -147,7 +143,7 @@ Json *MediaItem::createRecord (const StdString &agentIdValue) const {
 	prefix.agentId.assign ((! agentIdValue.empty ()) ? agentIdValue : agentId);
 
 	params = new Json ();
-	params->set (SystemInterface::Field_id, mediaId);
+	params->set (SystemInterface::Field_id, id);
 	params->set (SystemInterface::Field_name, name);
 	params->set (SystemInterface::Field_mediaPath, mediaPath);
 	params->set (SystemInterface::Field_mediaDirname, mediaDirname);
@@ -168,16 +164,20 @@ Json *MediaItem::createRecord (const StdString &agentIdValue) const {
 	params->set (SystemInterface::Field_audioBitrate, audioBitrate);
 	params->set (SystemInterface::Field_tags, tags);
 	params->set (SystemInterface::Field_sortKey, sortKey);
+	params->set (SystemInterface::Field_playSeekTimestamp, playSeekTimestamp);
 	return (SystemInterface::instance->createCommand (prefix, SystemInterface::Command_MediaItem, params));
 }
 
-bool MediaItem::readRecord (Json *record) {
+bool MediaItem::readRecord (Json *record, bool skipValidation) {
 	clear ();
 	if (! record) {
 		return (false);
 	}
 	agentId = SystemInterface::instance->getCommandAgentId (record);
-	mediaId = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_id, "");
+	id = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_id, "");
+	if (id.empty ()) {
+		return (false);
+	}
 	name = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_name, "");
 	mediaPath = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_mediaPath, "");
 	mediaDirname = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_mediaDirname, "");
@@ -198,20 +198,21 @@ bool MediaItem::readRecord (Json *record) {
 	SystemInterface::instance->getCommandNumberArrayParam (record, SystemInterface::Field_thumbnailTimestamps, &thumbnailTimestamps, 0, true);
 	SystemInterface::instance->getCommandStringArrayParam (record, SystemInterface::Field_tags, &tags, true);
 	sortKey = SystemInterface::instance->getCommandStringParam (record, SystemInterface::Field_sortKey, "");
-	if (! isValid ()) {
+	playSeekTimestamp = SystemInterface::instance->getCommandNumberParam (record, SystemInterface::Field_playSeekTimestamp, (int64_t) 0);
+	if ((! skipValidation) && (! isValid ())) {
 		return (false);
 	}
 	return (true);
 }
 
-bool MediaItem::readRecordStore (const StdString &mediaIdValue) {
+bool MediaItem::readRecordStore (const StdString &mediaIdValue, bool skipValidation) {
 	Json record;
 
 	clear ();
 	if (! RecordStore::instance->find (&record, mediaIdValue, SystemInterface::CommandId_MediaItem)) {
 		return (false);
 	}
-	return (readRecord (&record));
+	return (readRecord (&record, skipValidation));
 }
 
 bool MediaItem::readMediaReader (const MediaReader &reader) {
@@ -231,6 +232,8 @@ bool MediaItem::readMediaReader (const MediaReader &reader) {
 	return (isValid ());
 }
 
+constexpr const char *selectSql = "SELECT id, name, mediaPath, mediaDirname, thumbnailTimestamps, mtime, duration, mediaFileSize, totalBitrate, isVideo, isAudio, hasAudioAlbumArt, frameRate, videoBitrate, width, height, audioSampleRate, audioChannels, audioBitrate, tags, sortKey, playSeekTimestamp FROM ";
+constexpr const int selectColumnCount = 22;
 bool MediaItem::copyDatabaseRowValues (int columnCount, char **columnValues, char **columnNames) {
 	int i;
 	char *val;
@@ -240,7 +243,7 @@ bool MediaItem::copyDatabaseRowValues (int columnCount, char **columnValues, cha
 	}
 	i = 0;
 	val = columnValues[i];
-	mediaId.assign (val ? val : "");
+	id.assign (val ? val : "");
 
 	++i;
 	val = columnValues[i];
@@ -326,44 +329,76 @@ bool MediaItem::copyDatabaseRowValues (int columnCount, char **columnValues, cha
 	val = columnValues[i];
 	sortKey.assign (val ? val : "");
 
+	++i;
+	val = columnValues[i];
+	playSeekTimestamp = val ? StdString (val).parsedInt ((int64_t) 0) : 0;
+
 	return (true);
 }
 
-bool MediaItem::readDatabaseMediaPathRow (const StdString &databasePath, StdString *errorMessage, const StdString &mediaPathValue) {
+bool MediaItem::readDatabaseMediaPathRow (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &mediaPathValue, bool skipValidation) {
 	StdString sql;
 	int result;
 
 	clear ();
-	sql.sprintf ("%s WHERE mediaPath=", selectSql);
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (" WHERE mediaPath=");
 	sql.append (Database::getColumnValueSql (mediaPathValue));
 	sql.append (";");
 
+	if (errorMessage) {
+		errorMessage->assign ("");
+	}
 	result = Database::instance->exec (databasePath, sql, errorMessage, MediaItem::readDatabaseRow_row, this);
 	if (result != OpResult::Success) {
 		return (false);
 	}
-	if (errorMessage) {
-		errorMessage->assign ("");
+	if (id.empty ()) {
+		if (errorMessage) {
+			errorMessage->assign ("Record not found");
+		}
+		return (false);
 	}
-	return ((! mediaId.empty ()) && isValid ());
+	if ((! skipValidation) && (! isValid ())) {
+		if (errorMessage) {
+			errorMessage->assign ("Invalid record fields");
+		}
+		return (false);
+	}
+	return (true);
 }
-bool MediaItem::readDatabaseMediaIdRow (const StdString &databasePath, StdString *errorMessage, const StdString &mediaIdValue) {
+bool MediaItem::readDatabaseMediaIdRow (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &mediaIdValue, bool skipValidation) {
 	StdString sql;
 	int result;
 
 	clear ();
-	sql.sprintf ("%s WHERE id=", selectSql);
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (" WHERE id=");
 	sql.append (Database::getColumnValueSql (mediaIdValue));
 	sql.append (";");
 
+	if (errorMessage) {
+		errorMessage->assign ("");
+	}
 	result = Database::instance->exec (databasePath, sql, errorMessage, MediaItem::readDatabaseRow_row, this);
 	if (result != OpResult::Success) {
 		return (false);
 	}
-	if (errorMessage) {
-		errorMessage->assign ("");
+	if (id.empty ()) {
+		if (errorMessage) {
+			errorMessage->assign ("Record not found");
+		}
+		return (false);
 	}
-	return ((! mediaId.empty ()) && isValid ());
+	if ((! skipValidation) && (! isValid ())) {
+		if (errorMessage) {
+			errorMessage->assign ("Invalid record fields");
+		}
+		return (false);
+	}
+	return (true);
 }
 int MediaItem::readDatabaseRow_row (void *itPtr, int columnCount, char **columnValues, char **columnNames) {
 	MediaItem *it = (MediaItem *) itPtr;
@@ -371,12 +406,13 @@ int MediaItem::readDatabaseRow_row (void *itPtr, int columnCount, char **columnV
 	return (it->copyDatabaseRowValues (columnCount, columnValues, columnNames) ? 0 : -1);
 }
 
-bool MediaItem::readDatabaseRows (const StdString &databasePath, StdString *errorMessage, std::list<MediaItem> *destList, const StdString &searchKey, int offset, int limit, int sortOrder) {
+bool MediaItem::readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<MediaItem> *destList, const StdString &searchKey, int offset, int limit, int sortOrder) {
 	StdString sql;
 	OpResult result;
 
 	destList->clear ();
 	sql.assign (selectSql);
+	sql.append (tableName);
 	sql.append (MediaItem::getSelectWhereSql (searchKey));
 	if (sortOrder == SystemInterface::Constant_NewestSort) {
 		sql.append (" ORDER BY mtime DESC");
@@ -413,20 +449,24 @@ int MediaItem::readDatabaseRows_row (void *destListPtr, int columnCount, char **
 	return (0);
 }
 
-bool MediaItem::readDatabaseMetadata (const StdString &databasePath, StdString *errorMessage, int64_t *mediaSizeTotal, int64_t *mediaDurationTotal) {
+bool MediaItem::readDatabaseMetadata (const StdString &databasePath, const char *tableName, StdString *errorMessage, int64_t *mediaSizeTotal, int64_t *mediaDurationTotal) {
 	StdString sql;
 	OpResult result;
 	int64_t sizetotal, durationtotal;
 
 	sizetotal = 0;
 	durationtotal = 0;
-	sql.assign ("SELECT SUM(mediaFileSize) FROM MediaItem;");
+	sql.assign ("SELECT SUM(mediaFileSize) FROM ");
+	sql.append (tableName);
+	sql.append (";");
 	result = Database::instance->exec (databasePath, sql, errorMessage, MediaItem::readDatabaseMetadata_row, &sizetotal);
 	if (result != OpResult::Success) {
 		return (false);
 	}
 
-	sql.assign ("SELECT SUM(duration) FROM MediaItem;");
+	sql.assign ("SELECT SUM(duration) FROM ");
+	sql.append (tableName);
+	sql.append (";");
 	result = Database::instance->exec (databasePath, sql, errorMessage, MediaItem::readDatabaseMetadata_row, &durationtotal);
 	if (result != OpResult::Success) {
 		return (false);
@@ -454,12 +494,13 @@ int MediaItem::readDatabaseMetadata_row (void *int64Ptr, int columnCount, char *
 	return (0);
 }
 
-int MediaItem::countDatabaseRecords (const StdString &databasePath, StdString *errorMessage, const StdString &searchKey) {
+int MediaItem::countDatabaseRecords (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &searchKey) {
 	StdString sql;
 	OpResult result;
 	int count;
 
-	sql.assign ("SELECT COUNT(*) FROM MediaItem");
+	sql.assign ("SELECT COUNT(*) FROM ");
+	sql.append (tableName);
 	sql.append (MediaItem::getSelectWhereSql (searchKey));
 	sql.append (";");
 	count = 0;
@@ -483,16 +524,16 @@ int MediaItem::countDatabaseRecords_row (void *intPtr, int columnCount, char **c
 	return (0);
 }
 
-StdString MediaItem::getUpsertSql () const {
+StdString MediaItem::getUpsertSql (const char *tableName) const {
 	StdString s, update;
 	StringList fields;
 	int i;
 
-	if (mediaId.empty () || (! isValid ())) {
+	if (id.empty () || mediaPath.empty ()) {
 		return (StdString ());
 	}
 	fields.push_back (StdString ("id"));
-	fields.push_back (Database::getColumnValueSql (mediaId));
+	fields.push_back (Database::getColumnValueSql (id));
 	fields.push_back (StdString ("name"));
 	fields.push_back (Database::getColumnValueSql (name));
 	fields.push_back (StdString ("mediaPath"));
@@ -533,8 +574,10 @@ StdString MediaItem::getUpsertSql () const {
 	fields.push_back (Database::getColumnValueSql (tags.toJsonString ()));
 	fields.push_back (StdString ("sortKey"));
 	fields.push_back (Database::getColumnValueSql (sortKey));
+	fields.push_back (StdString ("playSeekTimestamp"));
+	fields.push_back (Database::getColumnValueSql (playSeekTimestamp));
 	s.assign ("INSERT INTO ");
-	s.append (Database::getRowInsertSql (StdString ("MediaItem"), fields));
+	s.append (Database::getRowInsertSql (StdString (tableName), fields));
 
 	for (i = 0; i < 6; ++i) {
 		fields.erase (fields.begin ());
@@ -547,6 +590,49 @@ StdString MediaItem::getUpsertSql () const {
 	s.append (update);
 	s.append (";");
 	return (s);
+}
+
+StdString MediaItem::getCreateTableSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("(id TEXT PRIMARY KEY, name TEXT, mediaPath TEXT, mediaDirname TEXT, thumbnailTimestamps TEXT, mtime INTEGER, duration INTEGER, mediaFileSize INTEGER, totalBitrate INTEGER, isVideo INTEGER, isAudio INTEGER, hasAudioAlbumArt INTEGER, frameRate REAL, videoBitrate INTEGER, width INTEGER, height INTEGER, audioSampleRate INTEGER, audioChannels INTEGER, audioBitrate INTEGER, tags TEXT, sortKey TEXT, playSeekTimestamp INTEGER);");
+
+	sql.append ("CREATE UNIQUE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("Path ON ");
+	sql.append (tableName);
+	sql.append ("(mediaPath);");
+
+	sql.append ("CREATE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("SortKey ON ");
+	sql.append (tableName);
+	sql.append ("(sortKey);");
+
+	sql.append ("CREATE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("Dirname ON ");
+	sql.append (tableName);
+	sql.append ("(mediaDirname);");
+
+	sql.append ("CREATE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("Mtime ON ");
+	sql.append (tableName);
+	sql.append ("(mtime);");
+
+	return (sql);
+}
+
+StdString MediaItem::getSelectAllSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (";");
+	return (sql);
 }
 
 StdString MediaItem::getSelectWhereSql (const StdString &searchKey) {
@@ -591,13 +677,15 @@ StdString MediaItem::getSelectWhereSql (const StdString &searchKey) {
 	return (sql);
 }
 
-StdString MediaItem::getUpdateTagsSql (const StdString &mediaId, const StringList &tags) {
+StdString MediaItem::getUpdateTagsSql (const char *tableName, const StdString &mediaId, const StringList &tags) {
 	StdString sql;
 
 	if (mediaId.empty ()) {
 		return (StdString ());
 	}
-	sql.assign ("UPDATE MediaItem SET tags=");
+	sql.assign ("UPDATE ");
+	sql.append (tableName);
+	sql.append (" SET tags=");
 	sql.append (Database::getColumnValueSql (tags.empty () ? StdString () : tags.toJsonString ()));
 	sql.append (" WHERE id=");
 	sql.append (Database::getColumnValueSql (mediaId));
@@ -605,18 +693,76 @@ StdString MediaItem::getUpdateTagsSql (const StdString &mediaId, const StringLis
 	return (sql);
 }
 
-StdString MediaItem::getDeleteSql (const StdString &mediaId) {
+StdString MediaItem::getDeleteSql (const char *tableName, const StdString &mediaId) {
 	StdString sql;
 
 	if (mediaId.empty ()) {
 		return (StdString ());
 	}
-	sql.assign ("DELETE FROM MediaItem WHERE id=");
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (" WHERE id=");
 	sql.append (Database::getColumnValueSql (mediaId));
 	sql.append (";");
 	return (sql);
 }
 
-StdString MediaItem::getDeleteAllSql () {
-	return (StdString ("DELETE FROM MediaItem;"));
+StdString MediaItem::getDeleteAllSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (";");
+	return (sql);
+}
+
+bool MediaItem::matchSearchKey (const StdString &searchSubject, const StdString &searchKey) {
+	StdString chars, subject, key, curmatch;
+	StringList parts;
+	StringList::iterator i;
+	bool firstmatch;
+	size_t subjectpos, subjectlen, findpos;
+
+	chars.assign (MediaItem::sortKeyCharacters);
+	chars.append (StdString::createSprintf ("%c", searchWildcard));
+	key = searchKey.lowercased ().filtered (chars);
+	key.split (StdString::createSprintf ("%c", searchWildcard), &parts);
+	if (key.empty () || parts.empty ()) {
+		return (true);
+	}
+	firstmatch = true;
+	subject.assign (searchSubject.lowercased ().filtered (MediaItem::sortKeyCharacters));
+	subjectpos = 0;
+	subjectlen = subject.size ();
+	while ((! parts.empty ()) && (subjectpos < subjectlen)) {
+		i = parts.begin ();
+		curmatch = *i;
+		parts.erase (i);
+		if (! curmatch.empty ()) {
+			findpos = subject.find (curmatch, subjectpos);
+			if (findpos == StdString::npos) {
+				return (false);
+			}
+			if (firstmatch && (findpos != 0)) {
+				return (false);
+			}
+			subjectpos = findpos + curmatch.length ();
+		}
+		firstmatch = false;
+	}
+	while (! parts.empty ()) {
+		i = parts.begin ();
+		if (! i->empty ()) {
+			return (false);
+		}
+		parts.erase (i);
+	}
+	return (true);
+}
+
+bool MediaItem::match (const StdString &searchKey) {
+	if (searchKey.contains ("/") || searchKey.contains ("\\")) {
+		return (mediaPath.startsWith (searchKey));
+	}
+	return (MediaItem::matchSearchKey (sortKey, searchKey));
 }

@@ -34,6 +34,7 @@
 #ifndef MEDIA_PLAYLIST_H
 #define MEDIA_PLAYLIST_H
 
+class MediaItem;
 class MediaPlaylistItem;
 
 class MediaPlaylist {
@@ -41,7 +42,6 @@ public:
 	MediaPlaylist ();
 	~MediaPlaylist ();
 
-	static const StdString createTableSql;
 	static constexpr const int idCommandType = 0xFFFF;
 
 	// startPosition values
@@ -75,18 +75,25 @@ public:
 	// Copy playlist field values from a source object
 	void copyValues (const MediaPlaylist &source);
 
-	// Read MediaPlaylist records from the database and add them to destList, clearing the list before doing so. Returns true if the operation succeeded.
-	static bool readDatabaseRows (const StdString &databasePath, StdString *errorMessage, std::list<MediaPlaylist> *destList);
-	static int readDatabaseRows_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames);
+	// Generate a UUID value and write it to id
+	void resetId ();
 
-	// Return database upsert SQL generated from playlist fields
-	StdString getUpsertSql () const;
+	// Read MediaPlaylist records from the database and add them to destList, clearing the list before doing so. Returns true if the operation succeeded.
+	static bool readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<MediaPlaylist> *destList);
+	static int readDatabaseRows_playlistRow (void *destListPtr, int columnCount, char **columnValues, char **columnNames);
+	static int readDatabaseRows_itemRow (void *itemVectorPtr, int columnCount, char **columnValues, char **columnNames);
+
+	// Generate upsert SQL queries to store the playlist and append them to destList, clearing the list before doing so
+	void getUpsertSql (const char *tableName, StringList *destList) const;
+
+	// Generate delete SQL queries to remove the playlist and append them to destList, clearing the list before doing so
+	void getDeleteSql (const char *tableName, StringList *destList) const;
+
+	// Return an SQL CREATE TABLE statement that creates a table of MediaPlaylist records
+	static StdString getCreateTableSql (const char *tableName);
 
 	// Return an SQL DELETE statement that clears all records
-	static StdString getDeleteAllSql ();
-
-	// Return an SQL DELETE statement that removes all records with id values not appearing in items from excludeList
-	static StdString getDeleteExcludeSql (const std::list<MediaPlaylist> &excludeList);
+	static StdString getDeleteAllSql (const char *tableName);
 
 	// Set fields by reading values from a database row and return true if the operation succeeded
 	bool copyDatabaseRowValues (int columnCount, char **columnValues, char **columnNames);
@@ -101,10 +108,25 @@ public:
 class MediaPlaylistItem {
 public:
 	MediaPlaylistItem ();
-	MediaPlaylistItem (const StdString &mediaId, int64_t startTimestamp);
+	MediaPlaylistItem (const MediaPlaylistItem &mediaPlaylistItem);
+	MediaPlaylistItem (const MediaItem &mediaItem);
 	~MediaPlaylistItem ();
 
-	StdString mediaId;
-	int64_t startTimestamp;
+	// Set field values by copying from a MediaItem record
+	void readMediaItem (const MediaItem &mediaItem);
+
+	// Generate a UUID value and write it to id
+	void resetId ();
+
+	StdString id;
+	StdString name;
+	StdString mediaPath;
+	int64_t duration;
+	bool isVideo;
+	bool isAudio;
+	bool hasAudioAlbumArt;
+	int width;
+	int height;
+	int64_t playSeekTimestamp;
 };
 #endif

@@ -45,10 +45,9 @@ public:
 	MediaItem ();
 	~MediaItem ();
 
-	static const StdString createTableSql;
 	static const StdString sortKeyCharacters;
 
-	StdString mediaId;
+	StdString id;
 	StdString agentId;
 	StdString name;
 	StdString mediaPath;
@@ -70,9 +69,7 @@ public:
 	Int64List thumbnailTimestamps;
 	StringList tags;
 	StdString sortKey;
-
-	// Return a string representation of the MediaItem
-	StdString toString () const;
+	int64_t playSeekTimestamp;
 
 	// Clear all fields and optionally reset mediaId to a provided value
 	void clear (const StdString &mediaIdValue = StdString ());
@@ -86,48 +83,60 @@ public:
 	// Return a newly created Json object containing a MediaItem record populated from current field values
 	Json *createRecord (const StdString &agentIdValue = StdString ()) const;
 
-	// Read fields from a record object and return true if the operation succeeded
-	bool readRecord (Json *record);
+	// Read fields from a record object and verify completeness of field values unless skipValidation is true. Return true if the operation succeeded.
+	bool readRecord (Json *record, bool skipValidation = false);
 
-	// Read fields from the RecordStore record matching mediaIdValue and return true if the operation succeeded
-	bool readRecordStore (const StdString &mediaIdValue);
+	// Read fields from the RecordStore record matching mediaIdValue and verify completeness of field values unless skipValidation is true. Return true if the operation succeeded.
+	bool readRecordStore (const StdString &mediaIdValue, bool skipValidation = false);
 
 	// Read fields from a MediaReader object and return true if the operation succeeded
 	bool readMediaReader (const MediaReader &reader);
 
-	// Read fields from a database row and return true if the operation succeeded
-	bool readDatabaseMediaPathRow (const StdString &databasePath, StdString *errorMessage, const StdString &mediaPathValue);
-	bool readDatabaseMediaIdRow (const StdString &databasePath, StdString *errorMessage, const StdString &mediaIdValue);
+	// Read fields from a database row and verify completeness of field values unless skipValidation is true. Return true if the operation succeeded.
+	bool readDatabaseMediaPathRow (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &mediaPathValue, bool skipValidation = false);
+	bool readDatabaseMediaIdRow (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &mediaIdValue, bool skipValidation = false);
 	static int readDatabaseRow_row (void *itPtr, int columnCount, char **columnValues, char **columnNames);
 
-	// Read MediaItem records from the database and add them to destList, clearing the list before doing so. Returns true if the operation succeeded.
-	static bool readDatabaseRows (const StdString &databasePath, StdString *errorMessage, std::list<MediaItem> *destList, const StdString &searchKey = StdString (), int offset = 0, int limit = 0, int sortOrder = -1);
+	// Read MediaItem records from the database and add them to destList, clearing the list before doing so. Return true if the operation succeeded.
+	static bool readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<MediaItem> *destList, const StdString &searchKey = StdString (), int offset = 0, int limit = 0, int sortOrder = -1);
 	static int readDatabaseRows_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames);
 
-	// Compute metadata fields from database records and store them into the provided pointers. Returns true if the operation succeeded.
-	static bool readDatabaseMetadata (const StdString &databasePath, StdString *errorMessage, int64_t *mediaSizeTotal, int64_t *mediaDurationTotal);
+	// Compute metadata fields from database records and store them into the provided pointers. Return true if the operation succeeded.
+	static bool readDatabaseMetadata (const StdString &databasePath, const char *tableName, StdString *errorMessage, int64_t *mediaSizeTotal, int64_t *mediaDurationTotal);
 	static int readDatabaseMetadata_row (void *int64Ptr, int columnCount, char **columnValues, char **columnNames);
 
 	// Return database upsert SQL generated from item fields
-	StdString getUpsertSql () const;
+	StdString getUpsertSql (const char *tableName) const;
+
+	// Return an SQL CREATE TABLE statement that creates a table of MediaItem records
+	static StdString getCreateTableSql (const char *tableName);
 
 	// Return an SQL SELECT WHERE clause generated from searchKey, or an empty string if no WHERE clause applies
 	static StdString getSelectWhereSql (const StdString &searchKey);
 
+	// Return an SQL SELECT statement that selects all records
+	static StdString getSelectAllSql (const char *tableName);
+
 	// Return an SQL UPDATE statement that modifies a record's tags field
-	static StdString getUpdateTagsSql (const StdString &mediaId, const StringList &tags);
+	static StdString getUpdateTagsSql (const char *tableName, const StdString &mediaId, const StringList &tags);
 
 	// Return an SQL DELETE statement targeting a record matching mediaId
-	static StdString getDeleteSql (const StdString &mediaId);
+	static StdString getDeleteSql (const char *tableName, const StdString &mediaId);
 
 	// Return an SQL DELETE statement that clears all records
-	static StdString getDeleteAllSql ();
+	static StdString getDeleteAllSql (const char *tableName);
 
 	// Return the number of MediaItem database records, or -1 if a database error occurred
-	static int countDatabaseRecords (const StdString &databasePath, StdString *errorMessage, const StdString &searchKey = StdString ());
+	static int countDatabaseRecords (const StdString &databasePath, const char *tableName, StdString *errorMessage, const StdString &searchKey = StdString ());
 	static int countDatabaseRecords_row (void *intPtr, int columnCount, char **columnValues, char **columnNames);
 
 	// Set fields by reading values from a database row and return true if the operation succeeded
 	bool copyDatabaseRowValues (int columnCount, char **columnValues, char **columnNames);
+
+	// Return true if the subject string matches searchKey, with * (asterisk) characters treated as wildcards
+	static bool matchSearchKey (const StdString &searchSubject, const StdString &searchKey);
+
+	// Return true if the media item matches searchKey
+	bool match (const StdString &searchKey);
 };
 #endif

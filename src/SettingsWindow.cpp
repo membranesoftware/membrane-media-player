@@ -34,10 +34,10 @@
 #include "App.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
+#include "PrefsKey.h"
 #include "UiConfiguration.h"
 #include "UiText.h"
 #include "UiStack.h"
-#include "PlayerUi.h"
 #include "RenderResource.h"
 #include "SoundMixer.h"
 #include "Color.h"
@@ -91,8 +91,8 @@ SettingsWindow::SettingsWindow ()
 	windowOptionsLabel->reflow ();
 
 	prefs = App::instance->lockPrefs ();
-	mode = prefs->find (UiStack::windowSizeSettingKey, -1);
-	modename = prefs->find (App::displayModeKey, "");
+	mode = prefs->find (PrefsKey::windowSizeSetting, -1);
+	modename = prefs->find (PrefsKey::displayMode, "");
 	App::instance->unlockPrefs ();
 	if (mode < 0) {
 		if (! modename.empty ()) {
@@ -103,7 +103,7 @@ SettingsWindow::SettingsWindow ()
 		}
 		if (mode >= 0) {
 			prefs = App::instance->lockPrefs ();
-			prefs->insert (UiStack::windowSizeSettingKey, mode);
+			prefs->insert (PrefsKey::windowSizeSetting, mode);
 			App::instance->unlockPrefs ();
 		}
 	}
@@ -336,7 +336,7 @@ void SettingsWindow::windowSizeSliderChanged (void *itPtr, Widget *widgetPtr) {
 	if (mode >= 0) {
 		App::instance->setDisplayMode (mode);
 		prefs = App::instance->lockPrefs ();
-		prefs->insert (UiStack::windowSizeSettingKey, mode);
+		prefs->insert (PrefsKey::windowSizeSetting, mode);
 		App::instance->unlockPrefs ();
 	}
 }
@@ -363,7 +363,7 @@ void SettingsWindow::showClockToggleStateChanged (void *itPtr, Widget *widgetPtr
 	UiStack::instance->mainToolbarWindow->setClockEnabled (enable);
 	UiStack::instance->mainToolbar->reflow ();
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (UiStack::showClockKey, enable, false);
+	prefs->insert (PrefsKey::showClock, enable, false);
 	App::instance->unlockPrefs ();
 }
 
@@ -393,7 +393,7 @@ void SettingsWindow::soundVolumeSliderChanged (void *itPtr, Widget *widgetPtr) {
 
 	SoundMixer::instance->masterMixVolume = (int) (slider->value * (double) SoundMixer::maxMixVolume);
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (App::soundVolumeKey, SoundMixer::instance->masterMixVolume, SoundMixer::maxMixVolume);
+	prefs->insert (PrefsKey::soundVolume, SoundMixer::instance->masterMixVolume, SoundMixer::maxMixVolume);
 	App::instance->unlockPrefs ();
 }
 
@@ -403,6 +403,6 @@ void SettingsWindow::checkUpdatesToggleStateChanged (void *itPtr, Widget *widget
 
 	App::instance->isStartUpdateEnabled = toggle->isChecked;
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (PlayerUi::startUpdateKey, App::instance->isStartUpdateEnabled, true);
+	prefs->insert (PrefsKey::startUpdate, App::instance->isStartUpdateEnabled, true);
 	App::instance->unlockPrefs ();
 }

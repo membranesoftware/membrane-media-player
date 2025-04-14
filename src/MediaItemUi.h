@@ -59,10 +59,6 @@ public:
 	MediaItemUi (MediaItemWindow *mediaItemWindow);
 	~MediaItemUi ();
 
-	// Prefs keys
-	static constexpr const char *tagWindowExpandedKey = "MediaItemUiA";
-	static constexpr const char *imageSizeKey = "MediaItemUiB";
-
 	// Read-write data members
 	Ui::EventCallbackContext endCallback;
 
@@ -71,13 +67,14 @@ public:
 	int64_t selectPlayPositionTimestamp;
 	StdString mediaId;
 	MediaItem mediaItem;
+	bool isTagEnabled;
+	bool isPlayMarkerEnabled;
 
 	// Superclass override methods
 	void setHelpWindowContent (HelpWindow *helpWindow);
 
 protected:
 	// Superclass override methods
-	StdString getSpritePath ();
 	Widget *createBreadcrumbWidget ();
 	OpResult doLoad ();
 	void doUnload ();

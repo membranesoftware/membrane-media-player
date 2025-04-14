@@ -42,6 +42,7 @@
 #include "SpriteGroup.h"
 #include "TaskGroup.h"
 #include "OsUtil.h"
+#include "PrefsKey.h"
 #include "Json.h"
 #include "RecordStore.h"
 #include "MediaControl.h"
@@ -92,15 +93,14 @@ MediaItemUi::MediaItemUi (MediaItemWindow *mediaItemWindow)
 , isTagWindowExpanded (false)
 , shouldEnableTagWindow (false)
 {
+	spritePrefix.assign (SpriteId::MediaItemUi_prefix);
 	SdlUtil::createMutex (&loadThumbnailsMutex);
 	mediaItem.copyValues (mediaItemWindow->mediaItem);
+	isTagEnabled = mediaItemWindow->isTagEnabled;
+	isPlayMarkerEnabled = mediaItemWindow->isPlayMarkerEnabled;
 }
 MediaItemUi::~MediaItemUi () {
 	SdlUtil::destroyMutex (&loadThumbnailsMutex);
-}
-
-StdString MediaItemUi::getSpritePath () {
-	return (StdString ("ui/MediaItemUi/sprite"));
 }
 
 Widget *MediaItemUi::createBreadcrumbWidget () {
@@ -112,8 +112,14 @@ void MediaItemUi::setHelpWindowContent (HelpWindow *helpWindow) {
 	if (! mediaItem.isVideo) {
 		helpWindow->addAction (UiText::instance->getText (UiTextId::MediaItemUiHelpAction1Text));
 	}
-	else {
+	else if (! MediaControl::instance->mainOptions.mediaScan) {
 		helpWindow->addAction (UiText::instance->getText (UiTextId::MediaItemUiHelpAction2Text));
+	}
+	else if (!(isTagEnabled && isPlayMarkerEnabled)) {
+		helpWindow->addAction (UiText::instance->getText (UiTextId::MediaItemUiHelpAction3Text));
+	}
+	else {
+		helpWindow->addAction (UiText::instance->getText (UiTextId::MediaItemUiHelpAction4Text));
 	}
 	helpWindow->addTopicLink (UiText::instance->getText (UiTextId::MediaInspectorInterface).capitalized (), StdString (AppUrl::MediaInspectorInterface));
 }
@@ -124,7 +130,7 @@ OpResult MediaItemUi::doLoad () {
 	int imagesize;
 
 	prefs = App::instance->lockPrefs ();
-	imagesize = prefs->find (MediaItemUi::imageSizeKey, (int) Ui::MediumSize);
+	imagesize = prefs->find (PrefsKey::mediaItemUiImageSize, (int) Ui::MediumSize);
 	App::instance->unlockPrefs ();
 
 	setDetailImageSize (imagesize);
@@ -132,13 +138,13 @@ OpResult MediaItemUi::doLoad () {
 	cardView->setRowItemMarginSize (FrameThumbnailRow, 0.0f);
 	cardView->setRowSelectionAnimated (FrameThumbnailRow, true);
 	cardView->setRowRepositionAnimated (FrameThumbnailRow, true);
-	cardView->setRowLabeled (FrameThumbnailRow, true, MediaItemUi::thumbnailCardViewItemLabel, this);
 
 	if ((! mediaItem.isVideo) && mediaItem.isAudio && mediaItem.hasAudioAlbumArt) {
 		text = UiText::instance->getText (UiTextId::AlbumArt).capitalized ();
 	}
 	else {
 		text = UiText::instance->getText (UiTextId::Frames).capitalized ();
+		cardView->setRowLabeled (FrameThumbnailRow, true, MediaItemUi::thumbnailCardViewItemLabel, this);
 	}
 	cardView->setRowHeader (FrameThumbnailRow, createRowHeaderPanel (text));
 
@@ -178,6 +184,7 @@ void MediaItemUi::doAddMainToolbarItems (Toolbar *toolbar) {
 
 void MediaItemUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 	ImageWindow *image;
+	Button *button;
 
 	timelineWindowHandle.destroyAndClear ();
 	if (mediaItem.isVideo) {
@@ -198,7 +205,11 @@ void MediaItemUi::doAddSecondaryToolbarItems (Toolbar *toolbar) {
 	toolbar->addRightItem (createToolPopupButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_playButton), MediaItemUi::playButtonClicked, MediaItemUi::playButtonFocused, UiText::instance->getText (UiTextId::MediaItemUiPlayTooltip), "playButton"));
 	if (mediaItem.isVideo) {
 		toolbar->addRightItem (createToolPopupButton (sprites.getSprite (SpriteId::MediaItemUi_selectPlayPositionButton), MediaItemUi::selectPlayPositionButtonClicked, MediaItemUi::selectPlayPositionButtonFocused, UiText::instance->getText (UiTextId::MediaItemUiSelectPlayPositionTooltip), "selectPlayPositionButton"));
-		toolbar->addRightItem (createToolPopupButton (sprites.getSprite (SpriteId::MediaItemUi_playMarkerButton), MediaItemUi::addMarkerButtonClicked, MediaItemUi::addMarkerButtonFocused, UiText::instance->getText (UiTextId::MediaItemUiAddMarkerTooltip), "addMarkerButton"));
+		button = createToolPopupButton (sprites.getSprite (SpriteId::MediaItemUi_playMarkerButton), MediaItemUi::addMarkerButtonClicked, MediaItemUi::addMarkerButtonFocused, UiText::instance->getText (UiTextId::MediaItemUiAddMarkerTooltip), "addMarkerButton");
+		if (! isPlayMarkerEnabled) {
+			button->setDisabled (true);
+		}
+		toolbar->addRightItem (button);
 	}
 }
 
@@ -321,20 +332,22 @@ void MediaItemUi::doResume () {
 		cardView->addItem (iconlabel, InfoRow);
 	}
 
-	prefs = App::instance->lockPrefs ();
-	isTagWindowExpanded = prefs->find (MediaItemUi::tagWindowExpandedKey, false);
-	App::instance->unlockPrefs ();
-	tagWindowHandle.destroyAndAssign (new MediaItemTagWindow (mediaItem.tags));
-	tagWindow->itemId.assign (cardView->getAvailableItemId ());
-	tagWindow->expandStateChangeCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowExpandStateChanged, this);
-	tagWindow->addClickCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowAddClicked, this);
-	tagWindow->itemDeleteCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowItemDeleted, this);
-	row = InfoRow;
-	if (isTagWindowExpanded) {
-		tagWindow->setExpanded (true, true);
-		row = TagWindowRow;
+	if (isTagEnabled) {
+		prefs = App::instance->lockPrefs ();
+		isTagWindowExpanded = prefs->find (PrefsKey::mediaItemUiTagWindowExpanded, false);
+		App::instance->unlockPrefs ();
+		tagWindowHandle.destroyAndAssign (new MediaItemTagWindow (mediaItem.tags));
+		tagWindow->itemId.assign (cardView->getAvailableItemId ());
+		tagWindow->expandStateChangeCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowExpandStateChanged, this);
+		tagWindow->addClickCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowAddClicked, this);
+		tagWindow->itemDeleteCallback = Widget::EventCallbackContext (MediaItemUi::tagWindowItemDeleted, this);
+		row = InfoRow;
+		if (isTagWindowExpanded) {
+			tagWindow->setExpanded (true, true);
+			row = TagWindowRow;
+		}
+		cardView->addItem (tagWindow, tagWindow->itemId, row);
 	}
-	cardView->addItem (tagWindow, tagWindow->itemId, row);
 
 	cardView->reflow ();
 }
@@ -342,20 +355,26 @@ void MediaItemUi::doResume () {
 void MediaItemUi::doPause () {
 	HashMap *prefs;
 	PlayMarker marker;
-	StdString errmsg, sql;
+	StdString dbpath, errmsg, sql;
 	OpResult result;
 
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (MediaItemUi::imageSizeKey, detailImageSize, (int) Ui::MediumSize);
-	prefs->insert (MediaItemUi::tagWindowExpandedKey, isTagWindowExpanded, false);
+	prefs->insert (PrefsKey::mediaItemUiImageSize, detailImageSize, (int) Ui::MediumSize);
+	prefs->insert (PrefsKey::mediaItemUiTagWindowExpanded, isTagWindowExpanded, false);
 	App::instance->unlockPrefs ();
 
-	marker.recordId.assign (mediaId);
-	cardView->processRowItems (MarkerRow, MediaItemUi::doPause_processItems, &marker);
-	sql = marker.getUpdateSql ();
-	result = Database::instance->exec (MediaControl::instance->databasePath, sql, &errmsg);
-	if (result != OpResult::Success) {
-		Log::debug ("Failed to store play marker record; id=\"%s\" err=\"%s\"", marker.recordId.c_str (), errmsg.c_str ());
+	if (isPlayMarkerEnabled) {
+		marker.recordId.assign (mediaId);
+		cardView->processRowItems (MarkerRow, MediaItemUi::doPause_processItems, &marker);
+		sql = marker.getUpdateSql (MediaControl::playMarkerTableName);
+		result = MediaControl::instance->openDatabase (&dbpath);
+		if (result == OpResult::Success) {
+			result = Database::instance->exec (dbpath, sql, &errmsg);
+			Database::instance->close (dbpath);
+		}
+		if (result != OpResult::Success) {
+			Log::debug ("Failed to store play marker record; id=\"%s\" err=\"%s\"", marker.recordId.c_str (), errmsg.c_str ());
+		}
 	}
 }
 void MediaItemUi::doPause_processItems (void *markerPtr, Widget *itemWidget) {
@@ -372,7 +391,7 @@ void MediaItemUi::doUpdate (int msElapsed) {
 	std::list<MediaThumbnailWindow *>::iterator i1, i2;
 	std::list<MediaThumbnailWindow *> items;
 	MediaThumbnailWindow *thumbnail;
-	StdString cardid, scrolltargetid, errmsg;
+	StdString cardid, scrolltargetid, dbpath, errmsg;
 	PlayMarker marker;
 	Int64List::const_iterator j1, j2;
 	double x, y, w, h;
@@ -426,26 +445,29 @@ void MediaItemUi::doUpdate (int msElapsed) {
 		}
 	}
 
-	if (shouldLoadMarkers) {
+	if (isPlayMarkerEnabled && shouldLoadMarkers) {
 		shouldLoadMarkers = false;
 		marker.recordId.assign (mediaId);
-		if (! marker.readDatabaseRow (MediaControl::instance->databasePath, &errmsg)) {
-			Log::debug ("Failed to read play marker record; id=\"%s\" err=\"%s\"", marker.recordId.c_str (), errmsg.c_str ());
-		}
-		else {
-			j1 = marker.markerTimestamps.cbegin ();
-			j2 = marker.markerTimestamps.cend ();
-			while (j1 != j2) {
-				cardid = getMarkerThumbnailItemId (*j1);
-				if (! cardView->contains (cardid)) {
-					thumbnail = createMarkerThumbnailWindow ();
-					thumbnail->setSourceVideoFrame (mediaItem.mediaPath, *j1);
-					thumbnail->itemId.assign (cardid);
-					thumbnail->sortKey = getTimestampString (*j1);
-					cardView->addItem (thumbnail, thumbnail->itemId, MarkerRow);
-				}
-				++j1;
+		if (MediaControl::instance->openDatabase (&dbpath) == OpResult::Success) {
+			if (! marker.readDatabaseRow (dbpath, MediaControl::playMarkerTableName, &errmsg)) {
+				Log::debug ("Failed to read play marker record; id=\"%s\" err=\"%s\"", marker.recordId.c_str (), errmsg.c_str ());
 			}
+			else {
+				j1 = marker.markerTimestamps.cbegin ();
+				j2 = marker.markerTimestamps.cend ();
+				while (j1 != j2) {
+					cardid = getMarkerThumbnailItemId (*j1);
+					if (! cardView->contains (cardid)) {
+						thumbnail = createMarkerThumbnailWindow ();
+						thumbnail->setSourceVideoFrame (mediaItem.mediaPath, *j1);
+						thumbnail->itemId.assign (cardid);
+						thumbnail->sortKey = getTimestampString (*j1);
+						cardView->addItem (thumbnail, thumbnail->itemId, MarkerRow);
+					}
+					++j1;
+				}
+			}
+			Database::instance->close (dbpath);
 		}
 	}
 
@@ -469,7 +491,7 @@ void MediaItemUi::doUpdate (int msElapsed) {
 		}
 	}
 
-	if (shouldEnableTagWindow) {
+	if (isTagEnabled && shouldEnableTagWindow) {
 		if (tagWindow) {
 			tagWindow->setTags (mediaItem.tags);
 			tagWindow->setDisabled (false);
@@ -610,7 +632,7 @@ void MediaItemUi::thumbnailCardViewItemLabel (void *itPtr, Widget *itemWidget, C
 
 	thumbnail = MediaThumbnailWindow::castWidget (itemWidget);
 	if (thumbnail) {
-		cardLabel->setText (UiText::instance->getTimespanText (thumbnail->thumbnailTimestamp, UiText::HoursUnit));
+		cardLabel->setMainText (UiText::instance->getTimespanText (thumbnail->thumbnailTimestamp, UiText::HoursUnit));
 	}
 }
 
@@ -911,7 +933,7 @@ void MediaItemUi::addMediaItemTag (void *taskPtr) {
 	App::instance->unsetUiActive ();
 }
 void MediaItemUi::executeAddMediaItemTag (const StdString &tag) {
-	StdString sql, errmsg;
+	StdString sql, dbpath, errmsg;
 	OpResult result;
 	StringList cmdtags;
 
@@ -924,8 +946,12 @@ void MediaItemUi::executeAddMediaItemTag (const StdString &tag) {
 	}
 	cmdtags.assign (mediaItem.tags);
 	cmdtags.push_back (tag);
-	sql = MediaItem::getUpdateTagsSql (mediaId, cmdtags);
-	result = Database::instance->exec (MediaControl::instance->databasePath, sql, &errmsg);
+	sql = MediaItem::getUpdateTagsSql (MediaControl::filescanTableName, mediaId, cmdtags);
+	result = MediaControl::instance->openDatabase (&dbpath);
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (dbpath, sql, &errmsg);
+		Database::instance->close (dbpath);
+	}
 	if (result != OpResult::Success) {
 		App::instance->showNotification (UiText::instance->getText (UiTextId::MediaItemUiTagRecordUpdateError));
 		return;
@@ -988,7 +1014,7 @@ void MediaItemUi::removeMediaItemTag (void *taskPtr) {
 	App::instance->unsetUiActive ();
 }
 void MediaItemUi::executeRemoveMediaItemTag (const StdString &tag) {
-	StdString sql, errmsg;
+	StdString sql, dbpath, errmsg;
 	OpResult result;
 	StringList cmdtags;
 
@@ -1000,8 +1026,12 @@ void MediaItemUi::executeRemoveMediaItemTag (const StdString &tag) {
 		return;
 	}
 	cmdtags.remove (tag);
-	sql = MediaItem::getUpdateTagsSql (mediaId, cmdtags);
-	result = Database::instance->exec (MediaControl::instance->databasePath, sql, &errmsg);
+	sql = MediaItem::getUpdateTagsSql (MediaControl::filescanTableName, mediaId, cmdtags);
+	result = MediaControl::instance->openDatabase (&dbpath);
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (dbpath, sql, &errmsg);
+		Database::instance->close (dbpath);
+	}
 	if (result != OpResult::Success) {
 		App::instance->showNotification (UiText::instance->getText (UiTextId::MediaItemUiTagRecordUpdateError));
 		return;
@@ -1013,17 +1043,22 @@ void MediaItemUi::executeRemoveMediaItemTag (const StdString &tag) {
 
 void MediaItemUi::storeRecord () {
 	MediaItem item;
-	StdString errmsg;
+	StdString dbpath, errmsg;
 	Json *record;
 
-	if (! item.readDatabaseMediaIdRow (MediaControl::instance->databasePath, &errmsg, mediaId)) {
-		Log::debug ("Failed to read MediaItem record; id=\"%s\" err=\"%s\"", mediaId.c_str (), errmsg.c_str ());
+	if (MediaControl::instance->openDatabase (&dbpath) != OpResult::Success) {
 		return;
 	}
-	record = item.createRecord (MediaControl::instance->agentId);
-	RecordStore::instance->insert (record);
-	delete (record);
-	App::instance->shouldSyncRecordStore = true;
+	if (! item.readDatabaseMediaIdRow (dbpath, MediaControl::filescanTableName, &errmsg, mediaId)) {
+		Log::debug ("Failed to read MediaItem record; id=\"%s\" err=\"%s\"", mediaId.c_str (), errmsg.c_str ());
+	}
+	else {
+		record = item.createRecord (MediaControl::instance->agentId);
+		RecordStore::instance->insert (record);
+		delete (record);
+		App::instance->shouldSyncRecordStore = true;
+	}
+	Database::instance->close (dbpath);
 }
 
 Widget *MediaItemUi::findLuaTargetWidget (const char *targetName) {

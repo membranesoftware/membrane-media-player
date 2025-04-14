@@ -31,160 +31,47 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "App.h"
-#include "SdlUtil.h"
 #include "Log.h"
 #include "StringList.h"
 #include "Json.h"
-#include "TaskGroup.h"
 #include "Database.h"
 #include "SystemInterface.h"
 #include "AppNews.h"
 
-AppNews *AppNews::instance = NULL;
-
-constexpr const char *createTableSql = "CREATE TABLE IF NOT EXISTS AppNews(record TEXT, buildId TEXT);";
-
 AppNews::AppNews ()
-: isReady (false)
-, isLoading (false)
-, isLoadFailed (false)
-, isDatabaseOpen (false) {
-	SdlUtil::createMutex (&databaseMutex);
+: updatePublishTime (0)
+{
 }
 AppNews::~AppNews () {
-	if (isDatabaseOpen && (! databasePath.empty ())) {
-		Database::instance->close (databasePath);
-		databasePath.assign ("");
-		isDatabaseOpen = false;
-	}
-	SdlUtil::destroyMutex (&databaseMutex);
 }
 
-void AppNews::createInstance () {
-	if (! AppNews::instance) {
-		AppNews::instance = new AppNews ();
-	}
-}
-void AppNews::freeInstance () {
-	if (AppNews::instance) {
-		delete (AppNews::instance);
-		AppNews::instance = NULL;
-	}
-}
-
-void AppNews::configure (const StdString &databasePathValue) {
-	if (databasePathValue.empty () || databasePath.equals (databasePathValue)) {
-		return;
-	}
-	if (isDatabaseOpen && (! databasePath.empty ())) {
-		Database::instance->close (databasePath);
-		databasePath.assign ("");
-		isDatabaseOpen = false;
-	}
-	databasePath.assign (databasePathValue);
-	isReady = false;
-	isLoadFailed = false;
-	isLoading = true;
-	TaskGroup::instance->run (TaskGroup::RunContext (AppNews::initialize, this));
-}
-
-void AppNews::initialize (void *itPtr) {
-	AppNews *it = (AppNews *) itPtr;
-	OpResult result;
-
-	result = it->executeInitialize ();
-	if (result != OpResult::Success) {
-		Log::debug ("Failed to initialize app data; err=%i", result);
-	}
-	it->isLoading = false;
-}
-OpResult AppNews::executeInitialize () {
-	OpResult result;
-	StdString errmsg;
-
-	if (databasePath.empty ()) {
-		return (OpResult::InvalidConfigurationError);
-	}
-	result = Database::instance->open (databasePath);
-	if (result == OpResult::Success) {
-		isDatabaseOpen = true;
-		result = Database::instance->exec (databasePath, createTableSql);
-	}
-	if (result == OpResult::Success) {
-		result = Database::instance->createMetadataTable (databasePath, StdString (AppNews::metadataTableName));
-	}
-	if (result == OpResult::Success) {
-		result = updateSchema (&errmsg);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to initialize app data; err=%i err=%s", result, errmsg.c_str ());
-		}
-	}
-
-	if (result == OpResult::Success) {
-		isReady = true;
-		isLoadFailed = false;
-	}
-	else {
-		isReady = false;
-		isLoadFailed = true;
-	}
-	return (result);
-}
-OpResult AppNews::updateSchema (StdString *errorMessage) {
-	OpResult result;
-	int version;
-
-	version = Database::instance->readMetadataVersion (databasePath, StdString (AppNews::metadataTableName));
-	if (version >= AppNews::metadataVersion) {
-		return (OpResult::Success);
-	}
-	if (version == 1) {
-		result = Database::instance->exec (databasePath, StdString ("ALTER TABLE AppNews ADD COLUMN buildId TEXT;"), errorMessage);
-		if (result != OpResult::Success) {
-			return (result);
-		}
-		result = Database::instance->exec (databasePath, StdString ("UPDATE AppNews SET buildId='';"), errorMessage);
-		if (result != OpResult::Success) {
-			return (result);
-		}
-		++version;
-	}
-	result = Database::instance->writeMetadataVersion (databasePath, StdString (AppNews::metadataTableName), AppNews::metadataVersion);
-	if (result != OpResult::Success) {
-		if (errorMessage) {
-			errorMessage->assign ("Schema update failed");
-		}
-		return (result);
-	}
-	return (OpResult::Success);
-}
-
-bool AppNews::parseCommand (const StdString &command, AppNews::NewsState *state) {
+bool AppNews::parseCommand (const StdString &command) {
+	bool result;
 	Json *cmd, params;
 
 	cmd = NULL;
-	if (! SystemInterface::instance->parseCommand (command, &cmd)) {
+	if ((! SystemInterface::instance->parseCommand (command, &cmd)) || (! cmd)) {
 		return (false);
 	}
-	if ((! cmd) || (SystemInterface::instance->getCommandId (cmd) != SystemInterface::CommandId_GetApplicationNewsResult)) {
-		return (false);
+	result = false;
+	if (SystemInterface::instance->getCommandId (cmd) == SystemInterface::CommandId_GetApplicationNewsResult) {
+		if (SystemInterface::instance->getCommandParams (cmd, &params)) {
+			parseCommandParams (&params);
+			result = true;
+		}
 	}
-	if (! SystemInterface::instance->getCommandParams (cmd, &params)) {
-		return (false);
-	}
-	parseCommandParams (&params, state);
 	delete (cmd);
-	return (true);
+	return (result);
 }
-void AppNews::parseCommandParams (Json *params, AppNews::NewsState *state) {
+
+void AppNews::parseCommandParams (Json *params) {
 	Json obj;
 	AppNews::NewsPost post;
 	int i, count;
 
-	state->updateBuildId = params->getString (SystemInterface::Field_applicationUpdateId, "");
-	state->updatePublishTime = params->getNumber (SystemInterface::Field_applicationUpdateTime, (int64_t) 0);
-	state->posts.clear ();
+	updateBuildId = params->getString (SystemInterface::Field_applicationUpdateId, "");
+	updatePublishTime = params->getNumber (SystemInterface::Field_applicationUpdateTime, (int64_t) 0);
+	posts.clear ();
 	count = params->getArrayLength (SystemInterface::Field_applicationPosts);
 	for (i = 0; i < count; ++i) {
 		if (params->getArrayObject (SystemInterface::Field_applicationPosts, i, &obj)) {
@@ -192,21 +79,19 @@ void AppNews::parseCommandParams (Json *params, AppNews::NewsState *state) {
 			post.publishTime = obj.getNumber (SystemInterface::Field_publishTime, (int64_t) 0);
 			post.endTime = obj.getNumber (SystemInterface::Field_endTime, (int64_t) 0);
 			if (! post.body.empty ()) {
-				state->posts.push_back (post);
+				posts.push_back (post);
 			}
 		}
 	}
 }
 
-OpResult AppNews::writeRecord (const StdString &command) {
-	StringList sql, cols;
-	StringList::const_iterator i1, i2;
-	StdString s, recordtext, errmsg;
-	OpResult result;
+bool AppNews::getInsertCommandSql (const StdString &command, const char *tableName, StringList *destList) {
+	StringList fields;
+	StdString sql, recordtext;
 	Json *cmd, params;
 
-	if (! isReady) {
-		return (OpResult::InvalidStateError);
+	if (! destList) {
+		return (false);
 	}
 	cmd = NULL;
 	if (SystemInterface::instance->parseCommand (command, &cmd)) {
@@ -220,69 +105,47 @@ OpResult AppNews::writeRecord (const StdString &command) {
 		}
 	}
 	if (recordtext.empty ()) {
-		return (OpResult::MalformedDataError);
+		return (false);
 	}
 
-	sql.push_back ("DELETE FROM AppNews;");
-	cols.push_back ("record");
-	cols.push_back (Database::getColumnValueSql (recordtext));
-	cols.push_back ("buildId");
-	cols.push_back (Database::getColumnValueSql (StdString (BUILD_ID)));
-	s.assign ("INSERT INTO ");
-	s.append (Database::getRowInsertSql (StdString ("AppNews"), cols));
-	s.append (";");
-	sql.push_back (s);
-	sql.push_back ("COMMIT;");
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (";");
+	destList->push_back (sql);
 
-	SDL_LockMutex (databaseMutex);
-	result = Database::instance->exec (databasePath, StdString ("BEGIN TRANSACTION;"), &errmsg);
-	if (result == OpResult::Success) {
-		i1 = sql.cbegin ();
-		i2 = sql.cend ();
-		while (i1 != i2) {
-			result = Database::instance->exec (databasePath, *i1, &errmsg);
-			if (result != OpResult::Success) {
-				break;
-			}
-			++i1;
-		}
-		if (result != OpResult::Success) {
-			Database::instance->exec (databasePath, StdString ("ROLLBACK;"));
-		}
-	}
-	SDL_UnlockMutex (databaseMutex);
-	if (result != OpResult::Success) {
-		Log::debug ("Failed to write app data; err=%s", errmsg.c_str ());
-	}
-	return (result);
+	fields.push_back ("record");
+	fields.push_back (Database::getColumnValueSql (recordtext));
+	fields.push_back ("buildId");
+	fields.push_back (Database::getColumnValueSql (StdString (BUILD_ID)));
+	sql.assign ("INSERT INTO ");
+	sql.append (Database::getRowInsertSql (StdString (tableName), fields));
+	sql.append (";");
+	destList->push_back (sql);
+
+	return (true);
 }
 
-bool AppNews::readRecord (AppNews::NewsState *state) {
-	StdString sql, errmsg;
+bool AppNews::readRecord (const StdString &databasePath, const char *tableName, StdString *errorMessage) {
+	StdString sql;
 	StringList cols;
 	OpResult result;
 	Json params;
 
-	if (! isReady) {
-		return (false);
-	}
-	state->posts.clear ();
-	sql.assign ("SELECT record, buildId FROM AppNews LIMIT 1;");
-	SDL_LockMutex (databaseMutex);
-	result = Database::instance->exec (databasePath, sql, &errmsg, AppNews::readRecord_row, &cols);
-	SDL_UnlockMutex (databaseMutex);
-
+	sql.assign ("SELECT record, buildId FROM ");
+	sql.append (tableName);
+	sql.append (" LIMIT 1;");
+	result = Database::instance->exec (databasePath, sql, errorMessage, AppNews::readRecord_row, &cols);
 	if (result != OpResult::Success) {
-		Log::debug ("Failed to read app data; err=%s", errmsg.c_str ());
-	}
-	if (cols.size () < 2) {
 		return (false);
 	}
-	if (! params.parse (cols.at (0))) {
+	if ((cols.size () < 2) || (! params.parse (cols.at (0)))) {
+		if (errorMessage) {
+			errorMessage->assign ("Invalid record fields");
+		}
 		return (false);
 	}
-	parseCommandParams (&params, state);
-	state->recordBuildId.assign (cols.at (1));
+	parseCommandParams (&params);
+	recordBuildId.assign (cols.at (1));
 	return (true);
 }
 int AppNews::readRecord_row (void *stringListPtr, int columnCount, char **columnValues, char **columnNames) {
@@ -294,4 +157,14 @@ int AppNews::readRecord_row (void *stringListPtr, int columnCount, char **column
 	s->push_back (columnValues[0]);
 	s->push_back (columnValues[1]);
 	return (0);
+}
+
+StdString AppNews::getCreateTableSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("(record TEXT, buildId TEXT);");
+
+	return (sql);
 }

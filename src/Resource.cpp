@@ -31,15 +31,13 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include "SDL2/SDL_image.h"
 #include "ft2build.h"
 #include FT_FREETYPE_H
 #include "App.h"
 #include "SdlUtil.h"
+#include "OsUtil.h"
+#include "Buffer.h"
 #include "UiText.h"
 #include "UiTextId.h"
 #include "Font.h"
@@ -49,10 +47,9 @@
 Resource *Resource::instance = NULL;
 
 Resource::Resource ()
-: dataPath ("")
-, freetype (NULL)
-, isBundleFile (false)
+: isBundleFile (false)
 , isOpen (false)
+, freetype (NULL)
 {
 	SdlUtil::createMutex (&fileMapMutex);
 	SdlUtil::createMutex (&textureMapMutex);
@@ -60,9 +57,6 @@ Resource::Resource ()
 }
 Resource::~Resource () {
 	close ();
-	clearFontMap ();
-	clearFileMap ();
-	clearTextureMap ();
 	SdlUtil::destroyMutex (&fileMapMutex);
 	SdlUtil::destroyMutex (&textureMapMutex);
 	SdlUtil::destroyMutex (&fontMapMutex);
@@ -137,27 +131,36 @@ void Resource::setSource (const StdString &path) {
 	Log::debug ("Set resource path; dataPath=\"%s\"", dataPath.c_str ());
 }
 
+void Resource::failLoad (const StdString &lastErrorMessageValue, const char *logErrorMessage) {
+	lastErrorMessage.assign (lastErrorMessageValue);
+	if (logErrorMessage) {
+		Log::debug ("Failed to load resource: %s", logErrorMessage);
+	}
+}
+
 OpResult Resource::open () {
-	struct stat st;
+	int filetype;
 	SDL_RWops *rw;
 	Resource::ArchiveEntry ae;
 	uint64_t id;
 	OpResult result;
 
+	if (dataPath.empty ()) {
+		failLoad (UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), "Missing data path");
+		return (OpResult::InvalidConfigurationError);
+	}
+	filetype = OsUtil::getFileType (dataPath);
+	if (filetype == OsUtil::FileNotFound) {
+		failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("File not found; path=\"%s\"", dataPath.c_str ()).c_str ());
+		return (OpResult::FileOperationFailedError);
+	}
 	if (FT_Init_FreeType (&(freetype))) {
 		failLoad (UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), "Failed to initialize freetype library");
 		return (OpResult::FreetypeOperationFailedError);
 	}
-	if (dataPath.empty ()) {
-		return (OpResult::InvalidConfigurationError);
-	}
-	if (stat (dataPath.c_str (), &st) != 0) {
-		failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("stat failed; path=\"%s\" err=\"%s\"", dataPath.c_str (), strerror (errno)).c_str ());
-		return (OpResult::FileOperationFailedError);
-	}
 
 	if (! isBundleFile) {
-		if (! S_ISDIR (st.st_mode)) {
+		if (filetype != OsUtil::DirectoryFile) {
 			failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), "Invalid resource path");
 			return (OpResult::MismatchedTypeError);
 		}
@@ -168,6 +171,7 @@ OpResult Resource::open () {
 	rw = SDL_RWFromFile (dataPath.c_str (), "r");
 	if (! rw) {
 		failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("Failed to open resource bundle file; path=\"%s\" error=\"%s\"", dataPath.c_str (), SDL_GetError ()).c_str ());
+		close ();
 		return (OpResult::FileOperationFailedError);
 	}
 
@@ -193,16 +197,17 @@ OpResult Resource::open () {
 	}
 
 	SDL_RWclose (rw);
-	if (result == OpResult::Success) {
+	if (result != OpResult::Success) {
+		failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("Invalid resource bundle file; path=\"%s\"", dataPath.c_str ()).c_str ());
+		close ();
+	}
+	else {
 		isOpen = true;
 	}
 	return (result);
 }
 
 void Resource::close () {
-	if (! isOpen) {
-		return;
-	}
 	clearFileMap ();
 	clearTextureMap ();
 	clearFontMap ();
@@ -301,6 +306,9 @@ bool Resource::fileExists (const StdString &path) {
 	StdString loadpath;
 	bool exists;
 
+	if (! isOpen) {
+		return (false);
+	}
 	exists = false;
 	if (isBundleFile) {
 		id = Resource::getPathId (path);
@@ -310,7 +318,7 @@ bool Resource::fileExists (const StdString &path) {
 		}
 	}
 	else {
-		loadpath.sprintf ("%s/%s", dataPath.c_str (), path.c_str ());
+		loadpath = OsUtil::getJoinedPath (dataPath, path);
 		rw = SDL_RWFromFile (loadpath.c_str (), "r");
 		if (rw) {
 			SDL_RWclose (rw);
@@ -320,13 +328,6 @@ bool Resource::fileExists (const StdString &path) {
 	return (exists);
 }
 
-void Resource::failLoad (const StdString &lastErrorMessageValue, const char *logErrorMessage) {
-	lastErrorMessage.assign (lastErrorMessageValue);
-	if (logErrorMessage) {
-		Log::debug ("Failed to load resource: %s", logErrorMessage);
-	}
-}
-
 SDL_RWops *Resource::openFile (const StdString &path, uint64_t *fileSize) {
 	uint64_t id;
 	std::map<uint64_t, Resource::ArchiveEntry>::iterator i;
@@ -334,6 +335,9 @@ SDL_RWops *Resource::openFile (const StdString &path, uint64_t *fileSize) {
 	StdString loadpath;
 	Sint64 pos;
 
+	if (! isOpen) {
+		return (NULL);
+	}
 	rw = NULL;
 	if (isBundleFile) {
 		id = Resource::getPathId (path);
@@ -372,7 +376,7 @@ SDL_RWops *Resource::openFile (const StdString &path, uint64_t *fileSize) {
 		}
 	}
 	else {
-		loadpath.sprintf ("%s/%s", dataPath.c_str (), path.c_str ());
+		loadpath = OsUtil::getJoinedPath (dataPath, path);
 		rw = SDL_RWFromFile (loadpath.c_str (), "r");
 		if (! rw) {
 			failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("SDL_RWFromFile failed, path=\"%s\" error=\"%s\"", loadpath.c_str (), SDL_GetError ()).c_str ());
@@ -388,6 +392,19 @@ SDL_RWops *Resource::openFile (const StdString &path, uint64_t *fileSize) {
 		}
 	}
 	return (rw);
+}
+
+OpResult Resource::readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength) {
+	SDL_RWops *rw;
+	OpResult result;
+
+	rw = openFile (path);
+	if (! rw) {
+		return (OpResult::FileOperationFailedError);
+	}
+	result = OsUtil::readFileLines (rw, callback, callbackData, maxLineLength);
+	SDL_RWclose (rw);
+	return (result);
 }
 
 Sint64 Resource::rwopsSize (SDL_RWops *rw) {
@@ -497,6 +514,9 @@ Buffer *Resource::loadFile (const StdString &path) {
 	uint8_t buf[8192];
 	size_t len, rlen;
 
+	if (! isOpen) {
+		return (NULL);
+	}
 	buffer = NULL;
 	SDL_LockMutex (fileMapMutex);
 	i = fileMap.find (path);
@@ -557,11 +577,23 @@ void Resource::unloadFile (const StdString &path) {
 	SDL_UnlockMutex (fileMapMutex);
 }
 
+int Resource::getFileCount () {
+	int count;
+
+	SDL_LockMutex (fileMapMutex);
+	count = (int) fileMap.size ();
+	SDL_UnlockMutex (fileMapMutex);
+	return (count);
+}
+
 SDL_Surface *Resource::loadSurface (const StdString &path) {
 	StdString loadpath;
 	SDL_RWops *rw;
 	SDL_Surface *surface;
 
+	if (! isOpen) {
+		return (NULL);
+	}
 	surface = NULL;
 	if (isBundleFile) {
 		rw = openFile (path);
@@ -575,7 +607,7 @@ SDL_Surface *Resource::loadSurface (const StdString &path) {
 		}
 	}
 	else {
-		loadpath.sprintf ("%s/%s", dataPath.c_str (), path.c_str ());
+		loadpath = OsUtil::getJoinedPath (dataPath, path);
 		surface = IMG_Load (loadpath.c_str ());
 		if (! surface) {
 			failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("IMG_Load failed; path=\"%s\" err=\"%s\"", path.c_str (), SDL_GetError ()).c_str ());
@@ -593,6 +625,9 @@ SDL_Texture *Resource::loadTexture (const StdString &path, bool refcountOnly) {
 	SDL_Surface *surface;
 	SDL_Texture *texture;
 
+	if (! isOpen) {
+		return (NULL);
+	}
 	texture = NULL;
 	SDL_LockMutex (textureMapMutex);
 	i = textureMap.find (path);
@@ -621,7 +656,7 @@ SDL_Texture *Resource::loadTexture (const StdString &path, bool refcountOnly) {
 		}
 	}
 	else {
-		loadpath.sprintf ("%s/%s", dataPath.c_str (), path.c_str ());
+		loadpath = OsUtil::getJoinedPath (dataPath, path);
 		surface = IMG_Load (loadpath.c_str ());
 		if (! surface) {
 			failLoad (UiText::instance->getText (UiTextId::FileOpenFailed).capitalized (), StdString::createSprintf ("IMG_Load failed; path=\"%s\" err=\"%s\"", path.c_str (), SDL_GetError ()).c_str ());
@@ -638,7 +673,6 @@ SDL_Texture *Resource::loadTexture (const StdString &path, bool refcountOnly) {
 		failLoad (UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("SDL_CreateTextureFromSurface failed; path=\"%s\" err=\"%s\"", path.c_str (), SDL_GetError ()).c_str ());
 		return (NULL);
 	}
-
 	data.texture = texture;
 	data.refcount = 1;
 	SDL_LockMutex (textureMapMutex);
@@ -653,6 +687,12 @@ SDL_Texture *Resource::createTexture (const StdString &path, SDL_Surface *surfac
 	Resource::TextureData data;
 	SDL_Texture *texture;
 
+	if (! isOpen) {
+		return (NULL);
+	}
+	if (! surface) {
+		return (NULL);
+	}
 	texture = NULL;
 	SDL_LockMutex (textureMapMutex);
 	i = textureMap.find (path);
@@ -682,6 +722,9 @@ SDL_Texture *Resource::createTexture (const StdString &path, int textureWidth, i
 	Resource::TextureData data;
 	SDL_Texture *texture;
 
+	if (! isOpen) {
+		return (NULL);
+	}
 	if ((textureWidth <= 0) || (textureHeight <= 0)) {
 		return (NULL);
 	}
@@ -727,6 +770,15 @@ void Resource::unloadTexture (const StdString &path) {
 	SDL_UnlockMutex (textureMapMutex);
 }
 
+int Resource::getTextureCount () {
+	int count;
+
+	SDL_LockMutex (textureMapMutex);
+	count = (int) textureMap.size ();
+	SDL_UnlockMutex (textureMapMutex);
+	return (count);
+}
+
 Font *Resource::loadFont (const StdString &path, int pointSize) {
 	std::map<StdString, Resource::FontData>::iterator i;
 	Resource::FontData data;
@@ -735,6 +787,12 @@ Font *Resource::loadFont (const StdString &path, int pointSize) {
 	Font *font;
 	int result;
 
+	if (! isOpen) {
+		return (NULL);
+	}
+	if (pointSize <= 0) {
+		return (NULL);
+	}
 	font = NULL;
 	key = Resource::getFontKey (path, pointSize);
 	SDL_LockMutex (fontMapMutex);
@@ -790,6 +848,15 @@ void Resource::unloadFont (const StdString &path, int pointSize) {
 	if (unloaded) {
 		unloadFile (path);
 	}
+}
+
+int Resource::getFontCount () {
+	int count;
+
+	SDL_LockMutex (fontMapMutex);
+	count = (int) fontMap.size ();
+	SDL_UnlockMutex (fontMapMutex);
+	return (count);
 }
 
 StdString Resource::getFontKey (const StdString &key, int pointSize) {

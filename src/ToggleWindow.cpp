@@ -144,7 +144,12 @@ void ToggleWindow::setImageColor (const Color &imageColor) {
 }
 
 void ToggleWindow::setDisabled (bool disabled) {
+	if (disabled == toggle->isDisabled) {
+		return;
+	}
 	toggle->setDisabled (disabled);
+	toggle->isInputSuspended = true;
+	resetInputState ();
 }
 
 void ToggleWindow::reflow () {

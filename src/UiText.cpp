@@ -78,7 +78,6 @@ OpResult UiText::load (const StdString &language) {
 		if ((pos1 == StdString::npos) || (pos2 == StdString::npos) || (pos1 >= pos2)) {
 			break;
 		}
-
 		s = text.substr (pos1 + 1, pos2 - pos1 - 1);
 		s.replace (StdString ("\\n"), StdString ("\n"));
 		textStrings.push_back (s);

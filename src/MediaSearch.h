@@ -36,7 +36,7 @@
 
 #include "StringList.h"
 
-class MediaItem;
+class JsonList;
 
 class MediaSearch {
 public:
@@ -45,28 +45,13 @@ public:
 
 	static constexpr const int defaultPageSize = 48;
 
-	typedef void (*EventCallback) (void *data, MediaSearch *search);
-	struct EventCallbackContext {
-		MediaSearch::EventCallback callback;
-		void *callbackData;
-		EventCallbackContext ():
-			callback (NULL),
-			callbackData (NULL) { }
-		EventCallbackContext (MediaSearch::EventCallback callback, void *callbackData):
-			callback (callback),
-			callbackData (callbackData) { }
-	};
-
 	// Read-write data members
 	int pageSize;
 	int sortOrder;
-	MediaSearch::EventCallbackContext addRecordsCallback;
-	MediaSearch::EventCallbackContext removeRecordsCallback;
 
 	// Read-only data members
 	StdString agentId;
 	int64_t lastStatusUpdateTime;
-	StringList eventRecordIds;
 	int mediaAvailableCount;
 	StdString searchKey;
 	bool isLoading;
@@ -81,11 +66,8 @@ public:
 	// Decrease the object's refcount. If this reduces the refcount to zero or less, delete the object.
 	void release ();
 
-	// Invoke any function contained in callback and return a boolean value indicating if a function executed
-	bool eventCallback (const MediaSearch::EventCallbackContext &callback);
-
 	// Execute operations appropriate for current search state
-	virtual void update (int msElapsed);
+	void update (int msElapsed);
 
 	// Start a new search operation targeting searchKeyValue and sortOrderValue. If searchKeyValue or sortKeyValue are not provided, leave them unchanged from current values.
 	void resetSearch (const StdString &searchKeyValue, int sortOrderValue);
@@ -96,19 +78,36 @@ public:
 	// Load the next page of results for the active search
 	void advanceSearch ();
 
-protected:
-	// Start a new search operation targeting searchKeyValue and sortOrderValue
-	virtual void doResetSearch (const StdString &searchKeyValue, int sortOrderValue);
+	// Append the contents of insertedRecordIds to destList
+	void getInsertedRecordIds (StringList *destList);
 
+	// Clear searchResultRecordIds after appending its contents to destList
+	void getSearchResultRecordIds (StringList *destList);
+
+	// Initialize search state and return a boolean value indicating if the operation succeeded
+	virtual bool initialize ();
+
+	// Find search result MediaItem records and append them to destList
+	virtual void findMediaItems (JsonList *destList);
+
+	// Return the total count of media items available from the search target, or -1 if the count is not known
+	virtual int getMediaAvailableCount ();
+
+protected:
 	int stage;
-	StringList foundRecordIds;
-	StringList insertedRecordIds;
 	bool shouldReloadSearch;
 	bool shouldAdvanceSearch;
 	StdString nextSearchKey;
 	int nextSortOrder;
+	SDL_mutex *recordIdMutex;
+	StringList searchResultRecordIds;
+	StringList insertedRecordIds;
 
 private:
+	// Task functions
+	static void loadSearchResults (void *itPtr);
+	void processSearchResults (const JsonList &records);
+
 	SDL_mutex *refcountMutex;
 	int refcount;
 };

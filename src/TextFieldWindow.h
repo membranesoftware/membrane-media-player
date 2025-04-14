@@ -58,6 +58,7 @@ public:
 	Widget::EventCallbackContext valueChangeCallback;
 	Widget::EventCallbackContext valueEditCallback;
 	Widget::EventCallbackContext enterButtonClickCallback;
+	Widget::EventCallbackContext fsBrowserPathSelectCallback;
 	bool shouldSkipTextClearCallbacks;
 
 	// Read-only data members
@@ -109,7 +110,11 @@ public:
 	// Assign keypress edit focus to the text field
 	void assignKeyFocus ();
 
+	// Execute a click event for the fs browse button if present
+	void mouseClickFsBrowseButton ();
+
 	// Superclass override methods
+	void setKeyFocus (bool enable);
 	void reflow ();
 
 private:

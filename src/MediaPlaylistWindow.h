@@ -42,6 +42,7 @@
 #include "Panel.h"
 
 class IntList;
+class MediaItem;
 class Image;
 class LabelWindow;
 class IconLabelWindow;
@@ -71,7 +72,6 @@ public:
 	Widget::EventCallbackContext optionChangeCallback;
 	Widget::EventCallbackContext editClickCallback;
 	Widget::EventCallbackContext playClickCallback;
-	StdString itemId;
 
 	// Read-only data members
 	double windowWidth;
@@ -81,8 +81,8 @@ public:
 	MediaPlaylist playlist;
 	PlayerWindow *player;
 
-	// Reset window content to show state from mediaPlaylist
-	void read (const MediaPlaylist &mediaPlaylist);
+	// Reset window content to show state from sourcePlaylist
+	void read (const MediaPlaylist &sourcePlaylist);
 
 	// Set the window's expand state, then execute any expand state change callback that might be configured unless shouldSkipStateChangeCallback is true
 	void setExpanded (bool expanded, bool shouldSkipStateChangeCallback = false);
@@ -96,11 +96,10 @@ public:
 	SliderWindow *createPlayDurationSlider ();
 
 	// Add an item to the window's playlist
-	void addItem (const StdString &mediaId, int64_t startTimestamp);
-	void addItem (const MediaPlaylistItem &playlistItem);
+	void addItem (const MediaItem &mediaItem);
 
 	// Remove and reorder playlist items as needed to match the provided index list
-	void resetItems (const IntList &indexList);
+	void setItemOrder (const IntList &indexList);
 
 	// Generate a UUID value and write it to playlist.id
 	void resetPlaylistId ();
@@ -112,6 +111,12 @@ public:
 	void setShuffle (bool shuffle);
 	void setStartPosition (int startPosition);
 	void setPlayDuration (int playDuration);
+
+	// Execute a task to write playlist records to the MediaControl database
+	void writeRecord ();
+
+	// Execute a task to delete playlist records from the MediaControl database
+	void removeRecord ();
 
 	// Start a playback sequence of list items targeting the provided PlayerWindow
 	void play (PlayerWindow *playerWindow);
@@ -177,12 +182,12 @@ private:
 	// End any active playlist execution
 	void endPlay ();
 
-	// Task functions
-	static void loadRecords (void *itPtr);
-	void executeLoadRecords ();
+	// Add a playlist item to the RecordStore as a MediaItem record
+	void insertMediaItemRecord (const MediaPlaylistItem &playlistItem);
 
 	WidgetHandle<PlayerWindow> playerHandle;
 	MediaPlaylistViewWindow *view;
+	StringList mediaItemIds;
 	Image *headerIcon;
 	LabelWindow *nameLabel;
 	IconLabelWindow *topItemCountLabel;
@@ -203,10 +208,6 @@ private:
 	ToggleWindow *shuffleToggle;
 	SliderWindow *startPositionSlider;
 	SliderWindow *playDurationSlider;
-	SDL_mutex *loadMutex;
-	StringList mediaItemIds;
-	StringList loadIds;
-	bool isLoadingRecords;
 	SequenceList<int> playItemIndexes;
 	int currentPlayItemIndex;
 	int64_t currentPlayDuration;

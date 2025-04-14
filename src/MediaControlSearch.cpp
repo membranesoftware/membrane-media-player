@@ -31,22 +31,11 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "App.h"
-#include "OsUtil.h"
 #include "Json.h"
-#include "SystemInterface.h"
-#include "TaskGroup.h"
-#include "RecordStore.h"
+#include "Database.h"
 #include "MediaItem.h"
-#include "MediaReader.h"
 #include "MediaControl.h"
 #include "MediaControlSearch.h"
-
-// Stage values
-constexpr const int Uninitialized = 0;
-constexpr const int Running = 1;
-constexpr const int FindStart = 2;
-constexpr const int FindWait = 3;
 
 MediaControlSearch::MediaControlSearch ()
 : MediaSearch ()
@@ -55,123 +44,49 @@ MediaControlSearch::MediaControlSearch ()
 MediaControlSearch::~MediaControlSearch () {
 }
 
-void MediaControlSearch::update (int msElapsed) {
-	MediaControl::Status status;
-
-	switch (stage) {
-		case Uninitialized: {
-			if (! MediaControl::instance->isReady) {
-				break;
-			}
-			if (agentId.empty ()) {
-				agentId.assign (MediaControl::instance->agentId);
-				if (agentId.empty ()) {
-					break;
-				}
-			}
-			shouldReloadSearch = false;
-			shouldAdvanceSearch = false;
-			stage = FindStart;
-			break;
-		}
-		case Running: {
-			if (shouldReloadSearch) {
-				eventRecordIds.assign (insertedRecordIds);
-				eventCallback (removeRecordsCallback);
-				RecordStore::instance->remove (insertedRecordIds);
-				eventRecordIds.clear ();
-				insertedRecordIds.clear ();
-				shouldReloadSearch = false;
-				stage = FindStart;
-			}
-			else if (shouldAdvanceSearch) {
-				shouldAdvanceSearch = false;
-				isLoading = true;
-				resultOffset += pageSize;
-				stage = FindWait;
-				retain ();
-				TaskGroup::instance->run (TaskGroup::RunContext (MediaControlSearch::findMediaItems, this));
-			}
-			else {
-				MediaControl::instance->getStatus (&status);
-				if (status.mediaCount >= 0) {
-					mediaAvailableCount = status.mediaCount;
-				}
-			}
-			break;
-		}
-		case FindStart: {
-			searchKey.assign (nextSearchKey);
-			sortOrder = nextSortOrder;
-			isLoading = true;
-			resultOffset = 0;
-			setSize = 0;
-			isFindComplete = false;
-			shouldAdvanceSearch = false;
-			searchReceiveCount = 0;
-			stage = FindWait;
-			retain ();
-			TaskGroup::instance->run (TaskGroup::RunContext (MediaControlSearch::findMediaItems, this));
-			break;
-		}
-		case FindWait: {
-			if (! isLoading) {
-				if (searchReceiveCount >= setSize) {
-					isFindComplete = true;
-				}
-				eventRecordIds.clear ();
-				eventRecordIds.swap (foundRecordIds);
-				eventCallback (addRecordsCallback);
-				eventRecordIds.clear ();
-				shouldAdvanceSearch = false;
-				stage = Running;
-				break;
-			}
-			break;
+bool MediaControlSearch::initialize () {
+	if (! MediaControl::instance->isReady) {
+		return (false);
+	}
+	if (agentId.empty ()) {
+		agentId.assign (MediaControl::instance->agentId);
+		if (agentId.empty ()) {
+			return (false);
 		}
 	}
+	return (true);
 }
 
-void MediaControlSearch::findMediaItems (void *itPtr) {
-	MediaControlSearch *it = (MediaControlSearch *) itPtr;
-
-	it->executeFindMediaItems ();
-	it->isLoading = false;
-	it->release ();
-}
-void MediaControlSearch::executeFindMediaItems () {
-	StdString errmsg;
+void MediaControlSearch::findMediaItems (JsonList *destList) {
+	StdString dbpath, errmsg;
+	std::list<MediaItem> items;
 	std::list<MediaItem>::const_iterator i1, i2;
-	Json *record;
 
-	foundRecordIds.clear ();
-	mediaItemList.clear ();
-	setSize = MediaItem::countDatabaseRecords (MediaControl::instance->databasePath, &errmsg, searchKey);
-	if (setSize < 0) {
+	if (MediaControl::instance->openDatabase (&dbpath) != OpResult::Success) {
 		return;
 	}
+	setSize = MediaItem::countDatabaseRecords (dbpath, MediaControl::filescanTableName, &errmsg, searchKey);
 	if (setSize > 0) {
-		if (! MediaItem::readDatabaseRows (MediaControl::instance->databasePath, &errmsg, &mediaItemList, searchKey, resultOffset, pageSize, sortOrder)) {
-			return;
+		if (MediaItem::readDatabaseRows (dbpath, MediaControl::filescanTableName, &errmsg, &items, searchKey, resultOffset, pageSize, sortOrder)) {
+			i1 = items.cbegin ();
+			i2 = items.cend ();
+			while (i1 != i2) {
+				destList->push_back (i1->createRecord (agentId));
+				++i1;
+			}
 		}
-		i1 = mediaItemList.cbegin ();
-		i2 = mediaItemList.cend ();
-		while (i1 != i2) {
-			record = i1->createRecord (agentId);
-			RecordStore::instance->insert (record, true);
-			delete (record);
-			foundRecordIds.push_back (i1->mediaId);
-			insertedRecordIds.push_back (i1->mediaId);
-			++searchReceiveCount;
-			++i1;
-		}
-		mediaItemList.clear ();
 	}
-	lastStatusUpdateTime = OsUtil::getTime ();
+	Database::instance->close (dbpath);
 }
 
-void MediaControlSearch::doResetSearch (const StdString &searchKeyValue, int sortOrderValue) {
-	nextSearchKey.assign (searchKeyValue);
-	nextSortOrder = sortOrderValue;
-	shouldReloadSearch = true;
+int MediaControlSearch::getMediaAvailableCount () {
+	MediaControl::Status status;
+
+	if (MediaControl::instance->isReady) {
+		MediaControl::instance->getStatus (&status);
+		if (status.mediaCount >= 0) {
+			return (status.mediaCount);
+		}
+	}
+	return (-1);
 }

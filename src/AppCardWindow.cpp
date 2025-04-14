@@ -37,13 +37,16 @@
 #include "Prng.h"
 #include "OsUtil.h"
 #include "MediaControl.h"
+#include "MediaUtil.h"
 #include "AppUrl.h"
 #include "Font.h"
 #include "Network.h"
 #include "SharedBuffer.h"
 #include "TaskGroup.h"
+#include "SequenceList.h"
 #include "HashMap.h"
 #include "Json.h"
+#include "PrefsKey.h"
 #include "SystemInterface.h"
 #include "Log.h"
 #include "AppNews.h"
@@ -58,24 +61,31 @@
 #include "Image.h"
 #include "Button.h"
 #include "Toggle.h"
+#include "VideoCycleWindow.h"
 #include "ProgressBar.h"
 #include "ProgressRing.h"
 #include "HyperlinkWindow.h"
-#include "PlayerUi.h"
 #include "AppCardWindow.h"
 
 constexpr const double windowWidthScale = 0.38f;
-constexpr const double unexpandedTextWidthScale = 0.21f;
+constexpr const double unexpandedTextWidthScale = 0.55f;
 constexpr const double progressBarScale = 0.38f;
 constexpr const int newsPostInfoTextPosition = 2;
+constexpr const char *primeVideoPath = "ui/PlayerUi/video/";
+constexpr const double primeVideoWidthScale = 0.715f;
+constexpr const int primeVideoCount = 6;
 
-AppCardWindow::AppCardWindow ()
+AppCardWindow::AppCardWindow (SpriteGroup *playerUiSpriteGroup, bool startupPrimePanel)
 : Panel ()
 , isExpanded (false)
 , isInitializing (false)
+, playerUiSpriteGroup (playerUiSpriteGroup)
+, startupPrimePanel (startupPrimePanel)
 , currentTextId (-1)
 , nextTextId (-1)
 , isTextCrawlEnabled (true)
+, isShowingInfoText (false)
+, isShowingPrimePanel (false)
 , isShowingUpdateRow (false)
 , isShowingUpdateLink (false)
 , isCheckingForUpdates (false)
@@ -85,8 +95,8 @@ AppCardWindow::AppCardWindow ()
 , currentNewsPostId (-1)
 , isInitializeShowingNewsPostsFirst (false)
 , isInitializeCheckingForUpdates (false)
-, loadNewsState (NULL)
-, updateNewsState (NULL)
+, updateAppNews (NULL)
+, primeVideoHandle (&primeVideo)
 {
 	ProgressRing *ring;
 
@@ -96,7 +106,6 @@ AppCardWindow::AppCardWindow ()
 	setFillBg (true, UiConfiguration::instance->mediumBackgroundColor);
 	setPaddingScale (0.5f, 0.5f);
 	windowWidth = App::instance->drawableWidth * windowWidthScale;
-	unexpandedTextWidth = App::instance->drawableWidth * unexpandedTextWidthScale;
 
 	headerIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_appInfoIcon)));
 	headerIcon->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
@@ -115,7 +124,7 @@ AppCardWindow::AppCardWindow ()
 	unexpandedTextLabel->setFixedPadding (true, 0.0f, 0.0f);
 
 	expandToggle = add (new Toggle (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_expandMoreButton), SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_expandLessButton)));
-	expandToggle->widgetName.assign ("appWindowExpandToggle");
+	expandToggle->widgetName.assign ("appInfoExpandToggle");
 	expandToggle->stateChangeCallback = Widget::EventCallbackContext (AppCardWindow::expandToggleStateChanged, this);
 	expandToggle->setImageColor (UiConfiguration::instance->buttonTextColor);
 	expandToggle->setStateMouseHoverTooltips (UiText::instance->getText (UiTextId::Expand).capitalized (), UiText::instance->getText (UiTextId::Minimize).capitalized ());
@@ -125,81 +134,78 @@ AppCardWindow::AppCardWindow ()
 	dividerPanel->setFixedSize (true, 1.0f, UiConfiguration::instance->headlineDividerLineWidth);
 	dividerPanel->isPanelSizeClipEnabled = true;
 	dividerPanel->isInputSuspended = true;
-	dividerPanel->isVisible = false;
 
 	versionIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_versionIcon)));
 	versionIcon->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
-	versionIcon->isVisible = false;
 
 	versionText = add (new TextFlow (1.0f, UiConfiguration::CaptionFont));
 	versionText->setFixedPadding (true, 0.0f, 0.0f);
 	versionText->setTextColor (UiConfiguration::instance->lightPrimaryTextColor);
 	versionText->setText (StdString::createSprintf ("%s %s\n%s %s", UiText::instance->getText (UiTextId::Version).capitalized ().c_str (), BUILD_ID, UiText::instance->getText (UiTextId::BuildDateText).c_str (), StdString (BUILD_DATE).replaced ("  ", " ").c_str ()));
-	versionText->isVisible = false;
 
 	updateIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateIcon)));
 	updateIcon->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
-	updateIcon->isVisible = false;
 
 	updateProgressBar = add (new ProgressBar ());
 	updateProgressBar->setSize (1.0f, UiConfiguration::instance->progressBarHeight);
 	updateProgressBar->setIndeterminate (true);
-	updateProgressBar->isVisible = false;
 
 	updateText = add (new TextFlow (1.0f, UiConfiguration::CaptionFont));
 	updateText->setFixedPadding (true, 0.0f, 0.0f);
 	updateText->setTextColor (UiConfiguration::instance->primaryTextColor);
-	updateText->isVisible = false;
 
 	updateLink = (HyperlinkWindow *) addWidget (new HyperlinkWindow ());
 	updateLink->linkOpenCallback = Widget::EventCallbackContext (AppCardWindow::updateLinkOpened, this);
 	updateLink->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
-	updateLink->isVisible = false;
 
-	headerUpdateIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateIcon)), 1);
-	headerUpdateIcon->setDrawColor (true, UiConfiguration::instance->statusOkTextColor);
-	headerUpdateIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::UpdateFoundPrompt));
-	headerUpdateIcon->isVisible = false;
+	unexpandedUpdateIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateIcon)), 1);
+	unexpandedUpdateIcon->setDrawColor (true, UiConfiguration::instance->statusOkTextColor);
+	unexpandedUpdateIcon->setMouseHoverTooltip (UiText::instance->getText (UiTextId::UpdateFoundPrompt));
+	unexpandedUpdateIcon->isVisible = false;
 
 	infoIcon = add (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_messageIcon)));
 	infoIcon->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
-	infoIcon->isVisible = false;
 
 	infoText = add (new TextFlow (1.0f, UiConfiguration::CaptionFont));
 	infoText->setFixedPadding (true, 0.0f, 0.0f);
 	infoText->setTextColor (UiConfiguration::instance->primaryTextColor);
-	infoText->isVisible = false;
 
-	updateButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateButton), Widget::EventCallbackContext (AppCardWindow::updateButtonClicked, this), UiText::instance->getText (UiTextId::CheckForUpdates).capitalized (), "appWindowUpdateButton"));
-	updateButton->isVisible = false;
-	aboutButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_aboutButton), Widget::EventCallbackContext (AppCardWindow::aboutButtonClicked, this), UiText::instance->getText (UiTextId::About).capitalized (), "appWindowAboutButton"));
-	aboutButton->isVisible = false;
-	nextButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_nextItemButton), Widget::EventCallbackContext (AppCardWindow::nextButtonClicked, this), UiText::instance->getText (UiTextId::Next).capitalized (), "appWindowNextButton"));
-	nextButton->isVisible = false;
+	updateButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_updateButton), Widget::EventCallbackContext (AppCardWindow::updateButtonClicked, this), UiText::instance->getText (UiTextId::CheckForUpdates).capitalized (), "appInfoUpdateButton"));
+	aboutButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_aboutButton), Widget::EventCallbackContext (AppCardWindow::aboutButtonClicked, this), UiText::instance->getText (UiTextId::About).capitalized (), "appInfoAboutButton"));
+	nextButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_nextItemButton), Widget::EventCallbackContext (AppCardWindow::nextButtonClicked, this), UiText::instance->getText (UiTextId::Next).capitalized (), "appInfoNextButton"));
+	nextButton->setDisabled (true);
+
+	primePanel = add (new Panel ());
+	primePanel->setFixedPadding (true, 0.0f, 0.0f);
+
+	primeButton = add (Ui::createIconButton (playerUiSpriteGroup->getSprite (SpriteId::PlayerUi_primeButton), Widget::EventCallbackContext (AppCardWindow::primeButtonClicked, this), UiText::instance->getText (UiTextId::AppInfoPrimeTooltip), "appInfoPrimeButton"));
+
+	backButton = add (Ui::createIconButton (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_okButton), Widget::EventCallbackContext (AppCardWindow::backButtonClicked, this), UiText::instance->getText (UiTextId::AppInfoBackTooltip), "appInfoBackButton"));
 
 	resetInfoText ();
+	resetUnexpandedInfoText ();
+	isShowingPrimePanel = startupPrimePanel;
+	resetControlsVisible ();
 	reflow ();
 }
 AppCardWindow::~AppCardWindow () {
-	if (loadNewsState) {
-		delete (loadNewsState);
-		loadNewsState = NULL;
+	if (primeVideo) {
+		primeVideo->stop ();
+		primeVideoHandle.destroyAndClear ();
 	}
-	if (updateNewsState) {
-		delete (updateNewsState);
-		updateNewsState = NULL;
+	if (updateAppNews) {
+		delete (updateAppNews);
+		updateAppNews = NULL;
 	}
 	SdlUtil::destroyMutex (&newsPostMutex);
 }
 
-void AppCardWindow::resetInfoText () {
-	bool configured;
+AppCardWindow *AppCardWindow::castWidget (Widget *widget) {
+	return (Widget::isWidgetClass (widget, ClassId::AppCardWindow) ? (AppCardWindow *) widget : NULL);
+}
 
+void AppCardWindow::resetInfoText () {
 	infoTextIds.clear ();
-	configured = MediaControl::instance->isConfigured;
-	if (! configured) {
-		infoTextIds.append (UiTextId::AppInfoPrimeConfigureText);
-	}
 	infoTextIds.append (UiTextId::AppInfoText1);
 	infoTextIds.append (UiTextId::AppInfoText2);
 	infoTextIds.append (UiTextId::AppInfoText3);
@@ -216,14 +222,10 @@ void AppCardWindow::resetInfoText () {
 	infoTextIds.append (UiTextId::AppInfoText14);
 	infoTextIds.append (UiTextId::AppInfoText15);
 	infoTextIds.append (UiTextId::AppInfoText16);
+	infoTextIds.append (UiTextId::AppInfoText17);
 
 	currentTextId = -1;
-	if (! configured) {
-		nextTextId = 0;
-	}
-	else {
-		nextTextId = Prng::instance->getRandomNumber (0, (int) infoTextIds.size () - 1);
-	}
+	nextTextId = Prng::instance->getRandomNumber (0, (int) infoTextIds.size () - 1);
 }
 
 void AppCardWindow::setExpanded (bool expanded, bool shouldSkipStateChangeCallback) {
@@ -239,47 +241,86 @@ void AppCardWindow::setExpanded (bool expanded, bool shouldSkipStateChangeCallba
 		setPaddingScale (0.5f, 0.5f);
 		nameLabel->setFont (UiConfiguration::BodyFont);
 	}
+	resetControlsVisible ();
 	if (isTextCrawlEnabled) {
 		isTextCrawlEnabled = false;
-		unexpandedTextLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (infoText->text, unexpandedTextWidth, Font::dotTruncateSuffix));
-		unexpandedTextLabel->setCrawl (false);
+		resetUnexpandedInfoText ();
 	}
-
-	unexpandedTextLabel->isVisible = (! isExpanded);
-	dividerPanel->isVisible = isExpanded;
-	versionIcon->isVisible = isExpanded;
-	versionText->isVisible = isExpanded;
-	infoIcon->isVisible = isExpanded;
-	infoText->isVisible = isExpanded;
-	updateButton->isVisible = isExpanded;
-	aboutButton->isVisible = isExpanded;
-	nextButton->isVisible = isExpanded;
-	resetUpdateVisible ();
 	expandToggle->setChecked (isExpanded, true);
-
+	if (isExpanded && isShowingPrimePanel) {
+		populatePrimePanel ();
+	}
+	else {
+		if (primeVideo) {
+			primeVideo->stop ();
+			primeVideoHandle.clear ();
+		}
+		primePanel->clear ();
+	}
 	reflow ();
+
+	if (! isExpanded) {
+		clearStartupPrimePanel ();
+	}
 	if (! shouldSkipStateChangeCallback) {
 		expandToggle->eventCallback (expandToggle->stateChangeCallback);
 	}
 }
 
-void AppCardWindow::resetUpdateVisible () {
-	updateIcon->isVisible = isExpanded && isShowingUpdateRow;
-	updateProgressBar->isVisible = isExpanded && isShowingUpdateRow && isCheckingForUpdates;
-	updateText->isVisible = isExpanded && isShowingUpdateRow;
-	updateLink->isVisible = isExpanded && isShowingUpdateRow && isShowingUpdateLink;
-	headerUpdateIcon->isVisible = (! isExpanded) && isShowingUpdateRow && isShowingUpdateLink;
+void AppCardWindow::resetUnexpandedInfoText () {
+	Font::Metrics metrics;
+	double w;
+
+	w = windowWidth * unexpandedTextWidthScale;
+	if (isShowingUpdateRow && isShowingUpdateLink) {
+		w -= (unexpandedUpdateIcon->width + (UiConfiguration::instance->marginSize * 2.0f));
+	}
+	unexpandedTextLabel->setWindowWidth (w);
+	if (isTextCrawlEnabled) {
+		UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->resetMetrics (&metrics, infoText->text);
+		unexpandedTextLabel->setText (infoText->text);
+		if (metrics.textWidth > w) {
+			unexpandedTextLabel->setCrawl (true);
+		}
+		else {
+			unexpandedTextLabel->setCrawl (false);
+		}
+	}
+	else {
+		unexpandedTextLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (infoText->text, w, Font::dotTruncateSuffix));
+		unexpandedTextLabel->setCrawl (false);
+	}
 }
 
-void AppCardWindow::readNewsState (AppNews::NewsState *state) {
+void AppCardWindow::resetControlsVisible () {
+	unexpandedTextLabel->isVisible = (! isExpanded);
+	dividerPanel->isVisible = isExpanded;
+	updateButton->isVisible = isExpanded && (! isShowingPrimePanel);
+	aboutButton->isVisible = isExpanded && (! isShowingPrimePanel);
+	nextButton->isVisible = isExpanded && (! isShowingPrimePanel);
+	primeButton->isVisible = isExpanded && (! isShowingPrimePanel);
+	backButton->isVisible = isExpanded && isShowingPrimePanel;
+	versionIcon->isVisible = isExpanded && (! isShowingPrimePanel);
+	versionText->isVisible = isExpanded && (! isShowingPrimePanel);
+	infoIcon->isVisible = isExpanded && isShowingInfoText && (! isShowingPrimePanel);
+	infoText->isVisible = isExpanded && isShowingInfoText && (! isShowingPrimePanel);
+	primePanel->isVisible = isExpanded && isShowingPrimePanel;
+	updateIcon->isVisible = isExpanded && isShowingUpdateRow && (! isShowingPrimePanel);
+	updateProgressBar->isVisible = isExpanded && isShowingUpdateRow && isCheckingForUpdates && (! isShowingPrimePanel);
+	updateText->isVisible = isExpanded && isShowingUpdateRow && (! isShowingPrimePanel);
+	updateLink->isVisible = isExpanded && isShowingUpdateRow && isShowingUpdateLink && (! isShowingPrimePanel);
+	unexpandedUpdateIcon->isVisible = (! isExpanded) && isShowingUpdateRow && isShowingUpdateLink;
+}
+
+void AppCardWindow::readAppNews (AppNews *appNews) {
 	int64_t now;
 	std::list<AppNews::NewsPost>::const_iterator i1, i2;
 
 	now = OsUtil::getTime ();
 	SDL_LockMutex (newsPostMutex);
 	newsPosts.clear ();
-	i1 = state->posts.cbegin ();
-	i2 = state->posts.cend ();
+	i1 = appNews->posts.cbegin ();
+	i2 = appNews->posts.cend ();
 	while (i1 != i2) {
 		if ((i1->endTime <= 0) || (now < i1->endTime)) {
 			newsPosts.push_back (i1->body);
@@ -288,9 +329,9 @@ void AppCardWindow::readNewsState (AppNews::NewsState *state) {
 	}
 	SDL_UnlockMutex (newsPostMutex);
 
-	if ((! state->updateBuildId.empty ()) && (state->updatePublishTime > 0) && state->recordBuildId.equals (BUILD_ID)) {
+	if ((! appNews->updateBuildId.empty ()) && (appNews->updatePublishTime > 0) && appNews->recordBuildId.equals (BUILD_ID)) {
 		updateText->setText (UiText::instance->getText (UiTextId::UpdateFoundPrompt));
-		updateLink->setLink (StdString::createSprintf ("%s, %s", state->updateBuildId.c_str (), UiText::instance->getDateText (state->updatePublishTime).c_str ()), AppUrl::instance->update (StdString::createSprintf ("%s_%s", BUILD_ID, PLATFORM_ID)));
+		updateLink->setLink (StdString::createSprintf ("%s, %s", appNews->updateBuildId.c_str (), UiText::instance->getDateText (appNews->updatePublishTime).c_str ()), AppUrl::instance->update (StdString::createSprintf ("%s_%s", BUILD_ID, PLATFORM_ID)));
 		isShowingUpdateLink = true;
 		isShowingUpdateRow = true;
 	}
@@ -300,7 +341,7 @@ void AppCardWindow::readNewsState (AppNews::NewsState *state) {
 		isShowingUpdateRow = false;
 	}
 	updateText->setTextColor (UiConfiguration::instance->primaryTextColor);
-	resetUpdateVisible ();
+	resetControlsVisible ();
 	reflow ();
 	eventCallback (layoutChangeCallback);
 }
@@ -311,18 +352,16 @@ void AppCardWindow::reflow () {
 
 	headerIcon->flowRight (&layoutFlow);
 	progressRingPanel->position.assign (headerIcon->position.x + (headerIcon->width / 2.0f) - (progressRingPanel->width / 2.0f), headerIcon->position.y + (headerIcon->height / 2.0f) - (progressRingPanel->height / 2.0f));
-	if (headerUpdateIcon->isVisible) {
-		headerUpdateIcon->flowRight (&layoutFlow);
+	if (unexpandedUpdateIcon->isVisible) {
+		unexpandedUpdateIcon->flowRight (&layoutFlow);
 	}
 
+	nameLabel->flowDown (&layoutFlow);
 	if (isExpanded) {
-		nameLabel->flowDown (&layoutFlow);
 		layoutFlow.y = heightPadding;
 		nameLabel->centerVertical (&layoutFlow);
 	}
 	else {
-		nameLabel->flowDown (&layoutFlow);
-		unexpandedTextLabel->setWindowWidth (unexpandedTextWidth);
 		unexpandedTextLabel->flowRight (&layoutFlow);
 	}
 
@@ -334,16 +373,18 @@ void AppCardWindow::reflow () {
 		layoutFlow.x = 0.0f;
 		dividerPanel->flowDown (&layoutFlow);
 
-		nextRowLayoutFlow ();
-		versionIcon->flowRight (&layoutFlow);
-		versionText->setViewWidth (windowWidth - layoutFlow.xExtent - (widthPadding * 2.0f) - UiConfiguration::instance->marginSize);
-		versionText->flowDown (&layoutFlow);
-
-		nextRowLayoutFlow ();
-		infoIcon->flowRight (&layoutFlow);
-		infoText->setViewWidth (windowWidth - layoutFlow.xExtent - (widthPadding * 2.0f) - UiConfiguration::instance->marginSize);
-		infoText->flowDown (&layoutFlow);
-
+		if (versionIcon->isVisible && versionText->isVisible) {
+			nextRowLayoutFlow ();
+			versionIcon->flowRight (&layoutFlow);
+			versionText->setViewWidth (windowWidth - layoutFlow.xExtent - (widthPadding * 2.0f) - UiConfiguration::instance->marginSize);
+			versionText->flowDown (&layoutFlow);
+		}
+		if (infoIcon->isVisible && infoText->isVisible) {
+			nextRowLayoutFlow ();
+			infoIcon->flowRight (&layoutFlow);
+			infoText->setViewWidth (windowWidth - layoutFlow.xExtent - (widthPadding * 2.0f) - UiConfiguration::instance->marginSize);
+			infoText->flowDown (&layoutFlow);
+		}
 		if (updateIcon->isVisible) {
 			nextRowLayoutFlow ();
 			updateIcon->flowRight (&layoutFlow);
@@ -358,18 +399,45 @@ void AppCardWindow::reflow () {
 				updateLink->flowDown (&layoutFlow);
 			}
 		}
+		if (primePanel->isVisible) {
+			nextRowLayoutFlow ();
+			primePanel->reflow ();
+			primePanel->flowDown (&layoutFlow);
+		}
 
-		updateButton->flowRight (&layoutFlow);
-		aboutButton->flowRight (&layoutFlow);
-		nextButton->flowRight (&layoutFlow);
+		nextRowLayoutFlow ();
+		if (primeButton->isVisible) {
+			primeButton->flowRight (&layoutFlow);
+		}
+		if (backButton->isVisible) {
+			backButton->flowRight (&layoutFlow);
+		}
+		if (updateButton->isVisible) {
+			updateButton->flowRight (&layoutFlow);
+		}
+		if (aboutButton->isVisible) {
+			aboutButton->flowRight (&layoutFlow);
+		}
+		if (nextButton->isVisible) {
+			nextButton->flowRight (&layoutFlow);
+		}
 
 		setFixedSize (true, windowWidth, layoutFlow.yExtent + heightPadding);
 		dividerPanel->setFixedSize (true, windowWidth, UiConfiguration::instance->headlineDividerLineWidth);
 
 		bottomRightLayoutFlow ();
-		nextButton->flowLeft (&layoutFlow);
-		aboutButton->flowLeft (&layoutFlow);
-		updateButton->flowLeft (&layoutFlow);
+		if (nextButton->isVisible) {
+			nextButton->flowLeft (&layoutFlow);
+		}
+		if (aboutButton->isVisible) {
+			aboutButton->flowLeft (&layoutFlow);
+		}
+		if (updateButton->isVisible) {
+			updateButton->flowLeft (&layoutFlow);
+		}
+		if (backButton->isVisible) {
+			backButton->flowLeft (&layoutFlow);
+		}
 	}
 	else {
 		setFixedSize (false);
@@ -379,8 +447,8 @@ void AppCardWindow::reflow () {
 	if (updateProgressBar->isVisible) {
 		updateProgressBar->setSize (width * progressBarScale, UiConfiguration::instance->progressBarHeight);
 	}
-	if (headerUpdateIcon->isVisible) {
-		headerUpdateIcon->position.assignY ((height / 2.0f) - (headerUpdateIcon->height / 2.0f));
+	if (unexpandedUpdateIcon->isVisible) {
+		unexpandedUpdateIcon->position.assignY (headerIcon->position.y + (headerIcon->height / 2.0f) - (unexpandedUpdateIcon->height / 2.0f));
 	}
 
 	bottomRightLayoutFlow ();
@@ -392,10 +460,11 @@ void AppCardWindow::doResize () {
 
 	Panel::doResize ();
 	windowWidth = App::instance->drawableWidth * windowWidthScale;
-	unexpandedTextWidth = App::instance->drawableWidth * unexpandedTextWidthScale;
-	unexpandedTextLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (infoText->text, unexpandedTextWidth, Font::dotTruncateSuffix));
-	unexpandedTextLabel->setCrawl (false);
 	isTextCrawlEnabled = false;
+	resetUnexpandedInfoText ();
+	if (isExpanded && isShowingPrimePanel) {
+		populatePrimePanel ();
+	}
 	reflow ();
 }
 
@@ -418,7 +487,6 @@ void AppCardWindow::nextButtonClicked (void *itPtr, Widget *widgetPtr) {
 }
 void AppCardWindow::setNextInfoText () {
 	StdString text;
-	Font::Metrics metrics;
 
 	if (isShowingNewsPosts) {
 		SDL_LockMutex (newsPostMutex);
@@ -464,23 +532,11 @@ void AppCardWindow::setNextInfoText () {
 		}
 	}
 	infoText->setText (text);
-
-	if (isTextCrawlEnabled) {
-		UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->resetMetrics (&metrics, text);
-		unexpandedTextLabel->setText (text);
-		if (metrics.textWidth > unexpandedTextWidth) {
-			unexpandedTextLabel->setCrawl (true);
-		}
-	}
-	else {
-		unexpandedTextLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (text, unexpandedTextWidth, Font::dotTruncateSuffix));
-		unexpandedTextLabel->setCrawl (false);
-	}
-
 	if (isShowingUpdateRow && (! isCheckingForUpdates) && (! isShowingUpdateLink)) {
 		isShowingUpdateRow = false;
-		resetUpdateVisible ();
+		resetControlsVisible ();
 	}
+	resetUnexpandedInfoText ();
 	reflow ();
 	eventCallback (layoutChangeCallback);
 }
@@ -500,91 +556,159 @@ void AppCardWindow::aboutButtonClicked (void *itPtr, Widget *widgetPtr) {
 void AppCardWindow::initialize (bool showNewsPostsFirst, bool executeCheckForUpdates) {
 	isInitializeShowingNewsPostsFirst = showNewsPostsFirst;
 	isInitializeCheckingForUpdates = executeCheckForUpdates;
-	if (loadNewsState) {
-		delete (loadNewsState);
-	}
-	loadNewsState = new AppNews::NewsState ();
-	isLoadNewsReceived = false;
 	isInitializing = true;
+	isLoadNewsReceived = false;
 	updateButton->setDisabled (true);
 	retain ();
-	App::instance->addUpdateTask (AppCardWindow::awaitAppNewsReady, this);
+	App::instance->addUpdateTask (AppCardWindow::awaitMediaControlReady, this);
+}
+void AppCardWindow::awaitMediaControlReady (void *itPtr) {
+	AppCardWindow *it = (AppCardWindow *) itPtr;
+
+	if (App::instance->isShuttingDown || it->isDestroyed) {
+		it->release ();
+		return;
+	}
+	if (! MediaControl::instance->isReady) {
+		App::instance->addUpdateTask (AppCardWindow::awaitMediaControlReady, it);
+		return;
+	}
+	it->endInitialize ();
+	it->release ();
 }
 void AppCardWindow::endInitialize () {
-	isInitializeCheckingForUpdates = false;
-	if (loadNewsState) {
-		delete (loadNewsState);
-		loadNewsState = NULL;
-	}
-	updateButton->setDisabled (false);
-	isInitializing = false;
-}
-void AppCardWindow::awaitAppNewsReady (void *itPtr) {
-	AppCardWindow *it = (AppCardWindow *) itPtr;
-
-	it->executeAwaitAppNewsReady ();
-	it->release ();
-}
-void AppCardWindow::executeAwaitAppNewsReady () {
-	if (AppNews::instance->isLoadFailed || App::instance->isShuttingDown) {
-		endInitialize ();
-		return;
-	}
-	if (! MediaControl::instance->isConfigured) {
-		retain ();
-		App::instance->addUpdateTask (AppCardWindow::showLoadResult, this);
-		return;
-	}
-	if (! AppNews::instance->isReady) {
-		retain ();
-		App::instance->addUpdateTask (AppCardWindow::awaitAppNewsReady, this);
-		return;
-	}
-	retain ();
-	TaskGroup::instance->run (TaskGroup::RunContext (AppCardWindow::readAppNewsRecord, this));
-}
-void AppCardWindow::readAppNewsRecord (void *itPtr) {
-	AppCardWindow *it = (AppCardWindow *) itPtr;
-
-	it->executeReadAppNewsRecord ();
-	it->release ();
-}
-void AppCardWindow::executeReadAppNewsRecord () {
 	HashMap *prefs;
 
-	isLoadNewsReceived = AppNews::instance->readRecord (loadNewsState);
-	if (isLoadNewsReceived) {
-		prefs = App::instance->lockPrefs ();
-		prefs->insert (PlayerUi::showAppNewsKey, (! isInitializeShowingNewsPostsFirst), false);
-		App::instance->unlockPrefs ();
+	if (! MediaControl::instance->appNews.recordBuildId.empty ()) {
+		isLoadNewsReceived = true;
 	}
-	retain ();
-	App::instance->addUpdateTask (AppCardWindow::showLoadResult, this);
-}
-void AppCardWindow::showLoadResult (void *itPtr) {
-	AppCardWindow *it = (AppCardWindow *) itPtr;
-
-	it->executeShowLoadResult ();
-	it->release ();
-}
-void AppCardWindow::executeShowLoadResult () {
-	if (loadNewsState && isLoadNewsReceived) {
-		readNewsState (loadNewsState);
-		if (isInitializeShowingNewsPostsFirst) {
-			SDL_LockMutex (newsPostMutex);
-			if (! newsPosts.empty ()) {
-				isShowingNewsPosts = true;
-				currentNewsPostId = -1;
-			}
-			SDL_UnlockMutex (newsPostMutex);
+	readAppNews (&(MediaControl::instance->appNews));
+	if (isInitializeShowingNewsPostsFirst) {
+		SDL_LockMutex (newsPostMutex);
+		if (! newsPosts.empty ()) {
+			isShowingNewsPosts = true;
+			currentNewsPostId = -1;
 		}
+		SDL_UnlockMutex (newsPostMutex);
 	}
 	setNextInfoText ();
+
+	if (isLoadNewsReceived) {
+		prefs = App::instance->lockPrefs ();
+		prefs->insert (PrefsKey::showAppNews, (! isInitializeShowingNewsPostsFirst), false);
+		App::instance->unlockPrefs ();
+	}
+
 	if (isInitializeCheckingForUpdates) {
 		isInitializeCheckingForUpdates = false;
 		checkForUpdates ();
 	}
-	endInitialize ();
+	updateButton->setDisabled (false);
+	nextButton->setDisabled (false);
+	isShowingInfoText = true;
+	resetControlsVisible ();
+	reflow ();
+	eventCallback (layoutChangeCallback);
+	isInitializing = false;
+}
+
+void AppCardWindow::populatePrimePanel () {
+	Panel *panel;
+	TextFlow *text;
+	Image *image;
+	double w;
+	int i, firstindex;
+
+	if (primeVideo) {
+		primeVideo->stop ();
+		primeVideoHandle.destroyAndClear ();
+	}
+	primePanel->clear ();
+
+	w = windowWidth * primeVideoWidthScale;
+	primeVideoHandle.assign (new VideoCycleWindow (floor (w), floor (w / MediaUtil::defaultAspectRatio)));
+	panel = primePanel->add (new Panel ());
+	panel->setFixedPadding (true, 0.0f, 0.0f);
+	panel->addWidget (primeVideo);
+	panel->setFixedSize (true, windowWidth - (UiConfiguration::instance->paddingSize * 2.0f), primeVideo->height);
+	primeVideo->position.assignX ((panel->width - primeVideo->width) / 2.0f);
+
+	if (startupPrimePanel) {
+		firstindex = 1;
+	}
+	else {
+		firstindex = Prng::instance->getRandomNumber (1, primeVideoCount);
+	}
+	primeVideo->addPlayPath (StdString::createSprintf ("%s%i.mp4", primeVideoPath, firstindex));
+	for (i = 1; i <= primeVideoCount; ++i) {
+		if (i == firstindex) {
+			continue;
+		}
+		primeVideo->addPlayPath (StdString::createSprintf ("%s%i.mp4", primeVideoPath, i));
+	}
+	primeVideo->play ();
+
+	w = windowWidth - (UiConfiguration::instance->paddingSize * 2.0f);
+	text = primePanel->add (new TextFlow (w, UiConfiguration::CaptionFont));
+	text->setText (UiText::instance->getText (UiTextId::AppInfoPrimeText1));
+
+	w = windowWidth - (UiConfiguration::instance->paddingSize * 3.0f);
+	panel = primePanel->add (new Panel ());
+	panel->setPaddingScale (0.5f, 0.0f);
+	panel->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
+	image = panel->add (new Image (playerUiSpriteGroup->getSprite (SpriteId::PlayerUi_playMediaButton)));
+	image->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
+	text = panel->add (new TextFlow (w - image->width - UiConfiguration::instance->marginSize, UiConfiguration::CaptionFont));
+	text->setText (UiText::instance->getText (UiTextId::AppInfoPrimeText2));
+	panel->setLayout (Panel::RightFlowLayoutOption | Panel::VerticalCenterLayoutOption);
+
+	panel = primePanel->add (new Panel ());
+	panel->setPaddingScale (0.5f, 0.0f);
+	panel->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
+	image = panel->add (new Image (playerUiSpriteGroup->getSprite (SpriteId::PlayerUi_smallMediaOptionIcon)));
+	image->setDrawColor (true, UiConfiguration::instance->primaryTextColor);
+	text = panel->add (new TextFlow (w - image->width - UiConfiguration::instance->marginSize, UiConfiguration::CaptionFont));
+	text->setText (UiText::instance->getText (UiTextId::AppInfoPrimeText3));
+	panel->setLayout (Panel::RightFlowLayoutOption | Panel::VerticalCenterLayoutOption);
+
+	primePanel->layoutSpacing = UiConfiguration::instance->marginSize / 2.0f;
+	primePanel->setLayout (Panel::DownFlowLayoutOption);
+}
+
+void AppCardWindow::primeButtonClicked (void *itPtr, Widget *widgetPtr) {
+	AppCardWindow *it = (AppCardWindow *) itPtr;
+
+	it->populatePrimePanel ();
+	it->isShowingPrimePanel = true;
+	it->resetControlsVisible ();
+	it->reflow ();
+	it->eventCallback (it->layoutChangeCallback);
+}
+
+void AppCardWindow::backButtonClicked (void *itPtr, Widget *widgetPtr) {
+	AppCardWindow *it = (AppCardWindow *) itPtr;
+
+	it->isShowingPrimePanel = false;
+	it->resetControlsVisible ();
+	it->reflow ();
+	it->eventCallback (it->layoutChangeCallback);
+	if (it->primeVideo) {
+		it->primeVideo->stop ();
+		it->primeVideoHandle.destroyAndClear ();
+	}
+	it->primePanel->clear ();
+	it->clearStartupPrimePanel ();
+}
+
+void AppCardWindow::clearStartupPrimePanel () {
+	HashMap *prefs;
+
+	if (startupPrimePanel) {
+		prefs = App::instance->lockPrefs ();
+		prefs->insert (PrefsKey::skipPrimePanel, true);
+		App::instance->unlockPrefs ();
+		startupPrimePanel = false;
+	}
 }
 
 void AppCardWindow::updateButtonClicked (void *itPtr, Widget *widgetPtr) {
@@ -606,17 +730,17 @@ void AppCardWindow::checkForUpdates () {
 
 	isShowingUpdateRow = true;
 	isShowingUpdateLink = false;
-	if (updateNewsState) {
-		delete (updateNewsState);
+	if (updateAppNews) {
+		delete (updateAppNews);
 	}
-	updateNewsState = new AppNews::NewsState ();
-	updateNewsState->recordBuildId.assign (BUILD_ID);
+	updateAppNews = new AppNews ();
+	updateAppNews->recordBuildId.assign (BUILD_ID);
 	isCheckingForUpdates = true;
 	isUpdateNewsReceived = false;
 	updateText->setText (UiText::instance->getText (UiTextId::CheckingForUpdates).capitalized ());
 	updateText->setTextColor (UiConfiguration::instance->statusOkTextColor);
 	progressRingPanel->isVisible = true;
-	resetUpdateVisible ();
+	resetControlsVisible ();
 	reflow ();
 	eventCallback (layoutChangeCallback);
 
@@ -640,14 +764,17 @@ void AppCardWindow::updateRequestComplete (void *itPtr, const StdString &targetU
 }
 void AppCardWindow::receiveUpdateResponse (int statusCode, SharedBuffer *responseData) {
 	StdString cmd;
+	StringList sql;
 
-	if (responseData && (responseData->length > 0)) {
+	if (responseData && (responseData->length > 0) && updateAppNews) {
 		cmd.assignBuffer (responseData);
-		if (! AppNews::instance->parseCommand (cmd, updateNewsState)) {
+		if (! updateAppNews->parseCommand (cmd)) {
 			Log::debug ("Check for update failed: invalid server response");
 		}
 		else {
-			AppNews::instance->writeRecord (cmd);
+			if (AppNews::getInsertCommandSql (cmd, MediaControl::appNewsTableName, &sql)) {
+				MediaControl::instance->execDatabase (sql);
+			}
 			isUpdateNewsReceived = true;
 		}
 	}
@@ -661,22 +788,23 @@ void AppCardWindow::showUpdateResult (void *itPtr) {
 	it->release ();
 }
 void AppCardWindow::executeShowUpdateResult () {
-	if ((! isUpdateNewsReceived) || (! updateNewsState)) {
+	if ((! isUpdateNewsReceived) || (! updateAppNews)) {
 		updateText->setText (UiText::instance->getText (UiTextId::UpdateErrorPrompt));
 	}
 	else {
-		readNewsState (updateNewsState);
+		readAppNews (updateAppNews);
 	}
 
-	if (updateNewsState) {
-		delete (updateNewsState);
-		updateNewsState = NULL;
+	if (updateAppNews) {
+		delete (updateAppNews);
+		updateAppNews = NULL;
 	}
 	isCheckingForUpdates = false;
 	isShowingUpdateRow = true;
 	updateText->setTextColor (UiConfiguration::instance->primaryTextColor);
 	progressRingPanel->isVisible = false;
-	resetUpdateVisible ();
+	resetControlsVisible ();
+	resetUnexpandedInfoText ();
 	reflow ();
 	eventCallback (layoutChangeCallback);
 }

@@ -396,6 +396,9 @@ void SystemInterface::transformInputFields_MediaItem (Json *destObject) {
 	if (destObject->isString ("mtime")) {
 		destObject->set ("mtime", destObject->getString ("mtime", "").parsedFloat ((double) 0.0f));
 	}
+	if (destObject->isString ("playSeekTimestamp")) {
+		destObject->set ("playSeekTimestamp", destObject->getString ("playSeekTimestamp", "").parsedFloat ((double) 0.0f));
+	}
 	len = destObject->getArrayLength ("thumbnailTimestamps");
 	if (len > 0) {
 		n.clear ();
@@ -462,6 +465,10 @@ void SystemInterface::hashFields_MediaItem (Json *commandParams, SystemInterface
 	hashUpdateFn (hashContextPtr, (unsigned char *) s.c_str (), s.length ());
 	s = commandParams->getString ("name", "");
 	if (! s.empty ()) {
+		hashUpdateFn (hashContextPtr, (unsigned char *) s.c_str (), s.length ());
+	}
+	if (commandParams->isNumber ("playSeekTimestamp")) {
+		s.sprintf ("%lli", (long long int) commandParams->getNumber ("playSeekTimestamp", (int64_t) 0));
 		hashUpdateFn (hashContextPtr, (unsigned char *) s.c_str (), s.length ());
 	}
 	s = commandParams->getString ("sortKey", "");

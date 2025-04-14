@@ -51,7 +51,6 @@ constexpr const double leftSnapScale = 2.75f;
 PlayerTimelineWindow::PlayerTimelineWindow (double timelineBarWidth)
 : Panel ()
 , isShortTimestampEnabled (false)
-, recordType (-1)
 , isInverseColor (false)
 , hoverPosition (-1.0f)
 , clickPosition (-1.0f)
@@ -111,21 +110,12 @@ void PlayerTimelineWindow::readRecord (const StdString &recordIdValue) {
 		return;
 	}
 	recordId.assign ("");
-	recordType = RecordStore::instance->getRecordIdCommand (recordIdValue);
-	if (recordType != SystemInterface::CommandId_MediaItem) {
-		return;
-	}
-	record = RecordStore::instance->find (recordIdValue, recordType);
+	record = RecordStore::instance->find (recordIdValue);
 	if (! record) {
-		recordType = -1;
-	}
-	else {
-		playDuration = SystemInterface::instance->getCommandNumberParam (record, SystemInterface::Field_duration, (int64_t) 0);
-		delete (record);
-	}
-	if (recordType < 0) {
 		return;
 	}
+	playDuration = SystemInterface::instance->getCommandNumberParam (record, SystemInterface::Field_duration, (int64_t) 0);
+	delete (record);
 	recordId.assign (recordIdValue);
 	minDurationUnitType = UiText::instance->getMinTimespanUnit (playDuration);
 	startTimeLabel->setText (UiText::instance->getTimespanText (0.0f, minDurationUnitType, isShortTimestampEnabled));
@@ -311,6 +301,7 @@ void PlayerTimelineWindow::populateTimestampFill () {
 	lastx = 0.0f;
 	panelx = -1.0f;
 	minw = UiConfiguration::instance->paddingSize / 2.0f;
+	w = minw;
 	i1 = timestampFillPositions.cbegin ();
 	i2 = timestampFillPositions.cend ();
 	while (i1 != i2) {

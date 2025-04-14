@@ -81,10 +81,6 @@ TagActionWindow::TagActionWindow ()
 TagActionWindow::~TagActionWindow () {
 }
 
-TagActionWindow *TagActionWindow::castWidget (Widget *widget) {
-	return (Widget::isWidgetClass (widget, ClassId::TagActionWindow) ? (TagActionWindow *) widget : NULL);
-}
-
 void TagActionWindow::setMediaText (const StdString &text) {
 	mediaTextIcon->setText (text);
 	mediaTextIcon->isVisible = true;

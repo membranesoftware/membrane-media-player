@@ -49,7 +49,6 @@ MediaItemImageWindow::MediaItemImageWindow (Json *mediaItemRecord)
 : MediaItemWindow (mediaItemRecord)
 {
 	classId = ClassId::MediaItemImageWindow;
-	setFillBg (true, Color (0.5f, 0.5f, 0.5f));
 	reflow ();
 }
 MediaItemImageWindow::~MediaItemImageWindow () {

@@ -152,6 +152,35 @@ OpResult Database::exec (const StdString &dbFilePath, const StdString &sql, StdS
 	return (result);
 }
 
+OpResult Database::execTransaction (const StdString &dbFilePath, const StringList &sql, StdString *errorMessage) {
+	OpResult result;
+	StringList::const_iterator i1, i2;
+
+	if (errorMessage) {
+		errorMessage->assign ("");
+	}
+	result = exec (dbFilePath, StdString ("BEGIN TRANSACTION;"), errorMessage);
+	if (result == OpResult::Success) {
+		i1 = sql.cbegin ();
+		i2 = sql.cend ();
+		while (i1 != i2) {
+			result = exec (dbFilePath, *i1, errorMessage);
+			if (result != OpResult::Success) {
+				break;
+			}
+			++i1;
+		}
+		if (result == OpResult::Success) {
+			result = exec (dbFilePath, StdString ("COMMIT;"), errorMessage);
+		}
+		else {
+			exec (dbFilePath, StdString ("ROLLBACK;"));
+		}
+	}
+
+	return (result);
+}
+
 StdString Database::getColumnValueSql (const StdString &value) {
 	StdString s;
 

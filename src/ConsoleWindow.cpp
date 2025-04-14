@@ -37,6 +37,7 @@
 #include "SpriteGroup.h"
 #include "HashMap.h"
 #include "OsUtil.h"
+#include "PrefsKey.h"
 #include "Ui.h"
 #include "Label.h"
 #include "Button.h"
@@ -45,8 +46,6 @@
 #include "TextFieldWindow.h"
 #include "FsBrowserWindow.h"
 #include "ConsoleWindow.h"
-
-constexpr const double fsBrowserWindowScale = 0.83f;
 
 ConsoleWindow::ConsoleWindow (double windowWidth, double windowHeight)
 : Panel ()
@@ -194,14 +193,14 @@ void ConsoleWindow::runButtonClicked (void *itPtr, Widget *widgetPtr) {
 	StdString path;
 
 	prefs = App::instance->lockPrefs ();
-	path = prefs->find (App::fsBrowserPathKey, "");
+	path = prefs->find (PrefsKey::fsBrowserPath, "");
 	App::instance->unlockPrefs ();
 	if (path.empty ()) {
 		path = OsUtil::getUserHomePath ();
 	}
 	it->fsBrowserPanelHandle.destroyAndAssign (Ui::createDarkWindowOverlayPanel ());
 
-	fs = (FsBrowserWindow *) it->fsBrowserPanel->add (new FsBrowserWindow (App::instance->drawableWidth * fsBrowserWindowScale, App::instance->drawableHeight * fsBrowserWindowScale, path));
+	fs = (FsBrowserWindow *) it->fsBrowserPanel->add (new FsBrowserWindow (App::instance->drawableWidth * UiConfiguration::instance->fsBrowserWindowScale, App::instance->drawableHeight * UiConfiguration::instance->fsBrowserWindowScale, path));
 	fs->sortOrder = FsBrowserWindow::DirectoriesFirstSort;
 	fs->selectType = FsBrowserWindow::SelectFiles;
 	fs->closeCallback = Widget::EventCallbackContext (ConsoleWindow::fsBrowserWindowClosed, it);
@@ -220,7 +219,7 @@ void ConsoleWindow::fsBrowserWindowClosed (void *itPtr, Widget *widgetPtr) {
 	StdString path;
 
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (App::fsBrowserPathKey, fs->browsePath, "");
+	prefs->insert (PrefsKey::fsBrowserPath, fs->browsePath, "");
 	App::instance->unlockPrefs ();
 	if (fs->isPathSelectionConfirmed) {
 		path.assign (fs->selectedPath);

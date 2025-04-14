@@ -36,8 +36,10 @@
 #include "UiText.h"
 #include "UiTextId.h"
 #include "UiConfiguration.h"
+#include "OsUtil.h"
 #include "SystemInterface.h"
 #include "Input.h"
+#include "MediaControl.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
 #include "Font.h"
@@ -57,8 +59,10 @@
 #include "PlayerWindow.h"
 
 constexpr const double volumeSliderTrackWidthScale = 0.25f;
-constexpr const int64_t fastSeekInterval = 30000;
+constexpr const int64_t fastSeekInterval = 10000;
 constexpr const int controlHideDelay = 4800;
+constexpr const int playStartSeekEnableDelay = 5000;
+constexpr const int maxHistoryRecordTimestampEndDelta = 20000;
 constexpr const double subtitleTextScale = 0.92f;
 constexpr const double subtitleTextShadowColor = 0.08f;
 constexpr const int subtitleTextShadowDx = -1;
@@ -77,7 +81,6 @@ PlayerWindow::PlayerWindow (double windowWidth, double windowHeight, int soundMi
 , windowHeight (windowHeight)
 , isMaximized (false)
 , isFullscreen (false)
-, recordType (-1)
 , playSeekPercent (0.0f)
 , playSeekTimestamp (0)
 , soundMixVolume (soundMixVolume)
@@ -94,6 +97,8 @@ PlayerWindow::PlayerWindow (double windowWidth, double windowHeight, int soundMi
 , timelinePopupTimestamp (-1)
 , timelineHoverClock (0)
 , timelinePopupHandle (&timelinePopup)
+, fastSeekClock (0)
+, fastSeekTimestamp (-1)
 , waveformHandle (&waveform)
 , subtitleTextHandle (&subtitleText)
 , subtitleFont (UiConfiguration::MediumSubtitleFont)
@@ -101,6 +106,8 @@ PlayerWindow::PlayerWindow (double windowWidth, double windowHeight, int soundMi
 , progressRingHandle (&progressRing)
 , progressRingShowClock (0)
 , isPlayStarting (false)
+, isPlayFailed (false)
+, playStartSeekEnableClock (0)
 , maximizeWidth (1.0f)
 , maximizeHeight (1.0f)
 {
@@ -220,6 +227,11 @@ PlayerWindow::PlayerWindow (double windowWidth, double windowHeight, int soundMi
 	messageIcon->setIconImageColor (UiConfiguration::instance->darkInverseTextColor);
 	messageIcon->isVisible = false;
 
+	fastSeekIcon = add (new IconLabelWindow (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_rewindButton), StdString (), UiConfiguration::CaptionFont, UiConfiguration::instance->lightSecondaryColor), messageZLevel);
+	fastSeekIcon->setFillBg (true, Color (0.0f, 0.0f, 0.0f, UiConfiguration::instance->scrimBackgroundAlpha));
+	fastSeekIcon->setIconImageColor (UiConfiguration::instance->darkInverseTextColor);
+	fastSeekIcon->isVisible = false;
+
 	setFixedPadding (true, 0.0f, 0.0f);
 	reflow ();
 }
@@ -238,7 +250,7 @@ PlayerWindow *PlayerWindow::castWidget (Widget *widget) {
 }
 
 void PlayerWindow::setWidgetNames () {
-	if ((recordType != SystemInterface::CommandId_MediaItem) || targetMedia.name.empty ()) {
+	if (targetMedia.name.empty ()) {
 		return;
 	}
 	widgetName.sprintf ("%sPlayerWindow", targetMedia.name.c_str ());
@@ -301,20 +313,10 @@ void PlayerWindow::unmaximize () {
 }
 
 void PlayerWindow::reflow () {
-	StdString *namestr;
 	double x, y, w, scale;
 
-	namestr = NULL;
-	if (recordType == SystemInterface::CommandId_MediaItem) {
-		namestr = &(targetMedia.name);
-	}
-	if ((! namestr) || namestr->empty ()) {
-		nameLabel->setText (StdString ());
-	}
-	else {
-		w = windowWidth - closeButton->width - (nameLabel->widthPadding * 2.0f);
-		nameLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (*namestr, w, Font::dotTruncateSuffix));
-	}
+	w = windowWidth - closeButton->width - (nameLabel->widthPadding * 2.0f);
+	nameLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (targetMedia.name, w, Font::dotTruncateSuffix));
 
 	nameLabel->position.assign (0.0f, 0.0f);
 	y = nameLabel->height;
@@ -369,6 +371,9 @@ void PlayerWindow::reflow () {
 	setFixedSize (true, windowWidth, windowHeight);
 	if (messageIcon->isVisible) {
 		messageIcon->position.assign ((width / 2.0f) - (messageIcon->width / 2.0f), (height / 2.0f) - (messageIcon->height / 2.0f));
+	}
+	if (fastSeekIcon->isVisible) {
+		fastSeekIcon->position.assign ((width / 2.0f) - (fastSeekIcon->width / 2.0f), timeline->position.y - fastSeekIcon->height);
 	}
 	if (progressRing) {
 		progressRing->position.assign ((width / 2.0f) - (progressRing->width / 2.0f), (height / 2.0f) - (progressRing->height / 2.0f));
@@ -443,15 +448,36 @@ void PlayerWindow::doUpdate (int msElapsed) {
 		return;
 	}
 	if (isPlayStarting) {
+		if (playStartSeekEnableClock > 0) {
+			playStartSeekEnableClock -= msElapsed;
+		}
 		if (nextPlayPath.empty () && video->isPlayPresented) {
 			isPlayStarting = false;
 			progressRingShowClock = UiConfiguration::instance->activityIconLingerDuration;
 			progressRingHandle.destroyAndClear ();
 			reflow ();
+			playHistoryMedia.copyValues (targetMedia);
+			playHistoryMedia.sortKey.assign (playHistoryMedia.name.lowercased ().filtered (MediaItem::sortKeyCharacters));
+			if (video->playTimestamp >= 0) {
+				playHistoryMedia.playSeekTimestamp = video->playTimestamp;
+			}
+			if (playHistoryMedia.playSeekTimestamp > (playHistoryMedia.duration - maxHistoryRecordTimestampEndDelta)) {
+				playHistoryMedia.playSeekTimestamp = playHistoryMedia.duration - maxHistoryRecordTimestampEndDelta;
+			}
+			if (playHistoryMedia.playSeekTimestamp < 0) {
+				playHistoryMedia.playSeekTimestamp = 0;
+			}
+			MediaControl::instance->addPlayHistoryRecord (playHistoryMedia);
 		}
 		else {
-			if (! progressRing) {
-				if (! video->isPlayFailed) {
+			if (isPlayFailed || (! video->isPlaying)) {
+				isPlayStarting = false;
+				progressRingShowClock = UiConfiguration::instance->activityIconLingerDuration;
+				progressRingHandle.destroyAndClear ();
+				reflow ();
+			}
+			else {
+				if (! progressRing) {
 					progressRingShowClock -= msElapsed;
 					if (progressRingShowClock <= 0) {
 						progressRingHandle.destroyAndAssign (new ProgressRing (UiConfiguration::instance->progressRingSize));
@@ -490,8 +516,16 @@ void PlayerWindow::doUpdate (int msElapsed) {
 		}
 	}
 
-	timeline->setPlayPosition (video->isPlaying ? video->playTimestamp : -1);
-	if ((recordType < 0) || (! timeline->isVisible) || (timelineHoverTimestamp < 0) || (video->videoStreamFrameWidth <= 0) || (video->videoStreamFrameHeight <= 0)) {
+	if (video->isPlaying) {
+		timeline->setPlayPosition (video->playTimestamp);
+		if (video->playTimestamp >= 0) {
+			playHistoryMedia.playSeekTimestamp = video->playTimestamp;
+		}
+	}
+	else {
+		timeline->setPlayPosition (-1);
+	}
+	if (targetMedia.id.empty () || (! timeline->isVisible) || (timelineHoverTimestamp < 0) || (video->videoStreamFrameWidth <= 0) || (video->videoStreamFrameHeight <= 0)) {
 		timelinePopupHandle.destroyAndClear ();
 		timelinePopupTimestamp = -1;
 	}
@@ -510,9 +544,7 @@ void PlayerWindow::doUpdate (int msElapsed) {
 				timelinePopup->setDropShadow (true, UiConfiguration::instance->dropShadowColor, UiConfiguration::instance->dropShadowWidth);
 				timelinePopup->setLoadingSize (w, h);
 				timelinePopup->onLoadScale (w);
-				if (recordType == SystemInterface::CommandId_MediaItem) {
-					timelinePopup->loadSeekTimestampVideoFrame (targetMedia.mediaPath, timelineHoverTimestamp, true);
-				}
+				timelinePopup->loadSeekTimestampVideoFrame (targetMedia.mediaPath, timelineHoverTimestamp, true);
 				timelinePopup->isInputSuspended = true;
 				timelinePopup->position.assignBounded (x, y, 0.0f, y, App::instance->drawableWidth - w, y);
 				timelinePopupTimestamp = timelineHoverTimestamp;
@@ -568,6 +600,17 @@ void PlayerWindow::doUpdate (int msElapsed) {
 			subtitleToggle->setStateMouseHoverTooltips (UiText::instance->getText (UiTextId::PlayerWindowSubtitleNotAvailableTooltip), UiText::instance->getText (UiTextId::PlayerWindowSubtitleNotAvailableTooltip));
 		}
 	}
+
+	if (fastSeekTimestamp >= 0) {
+		if (fastSeekClock > 0) {
+			fastSeekClock -= msElapsed;
+		}
+		if ((fastSeekClock <= 0) && (! isPlayStarting)) {
+			executeSeekTimestamp (fastSeekTimestamp);
+			fastSeekTimestamp = -1;
+			fastSeekIcon->isVisible = false;
+		}
+	}
 }
 
 bool PlayerWindow::doProcessMouseState (const Widget::MouseState &mouseState) {
@@ -592,8 +635,18 @@ void PlayerWindow::closeButtonClicked (void *itPtr, Widget *widgetPtr) {
 void PlayerWindow::videoPlayEnded (void *itPtr, Widget *widgetPtr) {
 	PlayerWindow *it = (PlayerWindow *) itPtr;
 
+	if ((! it->playHistoryMedia.id.empty ()) && (! it->playHistoryMedia.mediaPath.equals (it->nextPlayPath))) {
+		if (it->playHistoryMedia.playSeekTimestamp > (it->playHistoryMedia.duration - maxHistoryRecordTimestampEndDelta)) {
+			it->playHistoryMedia.playSeekTimestamp = it->playHistoryMedia.duration - maxHistoryRecordTimestampEndDelta;
+		}
+		if (it->playHistoryMedia.playSeekTimestamp < 0) {
+			it->playHistoryMedia.playSeekTimestamp = 0;
+		}
+		MediaControl::instance->addPlayHistoryRecord (it->playHistoryMedia);
+	}
 	if (it->nextPlayPath.empty ()) {
 		if (it->video->isPlayFailed) {
+			it->isPlayFailed = true;
 			it->messageIcon->setText (it->video->lastErrorMessage);
 			it->messageIcon->isVisible = true;
 			it->reflow ();
@@ -619,6 +672,8 @@ void PlayerWindow::videoPlayEnded (void *itPtr, Widget *widgetPtr) {
 			it->video->setPlaySeekPercent (it->playSeekPercent);
 		}
 		it->isPlayStarting = true;
+		it->playStartSeekEnableClock = playStartSeekEnableDelay;
+		it->isPlayFailed = false;
 		it->retain ();
 		it->video->play (Widget::EventCallbackContext (PlayerWindow::videoPlayEnded, it));
 	}
@@ -635,15 +690,23 @@ void PlayerWindow::stop () {
 	timelinePopupTimestamp = -1;
 }
 
+void PlayerWindow::setPlayTargetPath (const StdString &playPathValue) {
+	targetMedia.clear ();
+	targetMedia.mediaPath.assign (playPathValue);
+	targetMedia.name.assign (OsUtil::getPathBasename (playPathValue));
+	setWidgetNames ();
+	playSeekPercent = 0.0f;
+	playSeekTimestamp = 0;
+}
+
 void PlayerWindow::setPlayMedia (const StdString &mediaId) {
-	if (! targetMedia.mediaId.equals (mediaId)) {
+	if (! targetMedia.id.equals (mediaId)) {
 		targetMedia.clear ();
-		if (! targetMedia.readRecordStore (mediaId)) {
+		if (! targetMedia.readRecordStore (mediaId, true)) {
 			return;
 		}
 		timeline->readRecord (mediaId);
 	}
-	recordType = SystemInterface::CommandId_MediaItem;
 	setWidgetNames ();
 	playSeekPercent = 0.0f;
 	playSeekTimestamp = 0;
@@ -669,15 +732,14 @@ void PlayerWindow::setPlaySeekTimestamp (int64_t seekTimestamp) {
 }
 
 void PlayerWindow::play () {
-	if (recordType == SystemInterface::CommandId_MediaItem) {
-		playPath.assign (targetMedia.mediaPath);
-	}
-	else {
+	playPath.assign (targetMedia.mediaPath);
+	if (playPath.empty ()) {
 		return;
 	}
-
 	messageIcon->isVisible = false;
 	isPlayStarting = true;
+	playStartSeekEnableClock = playStartSeekEnableDelay;
+	isPlayFailed = false;
 	if (! video->isPlaying) {
 		video->setPlayPath (playPath);
 		if (playSeekTimestamp >= 0) {
@@ -718,34 +780,49 @@ bool PlayerWindow::isPaused () {
 
 void PlayerWindow::forwardButtonClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerWindow *it = (PlayerWindow *) itPtr;
-	int64_t delta, pos;
 
-	delta = it->timeline->playDuration * 33 / 100;
-	if (delta > fastSeekInterval) {
-		delta = fastSeekInterval;
+	if (it->isPlayStarting && (it->playStartSeekEnableClock > 0)) {
+		return;
 	}
-	pos = it->video->playTimestamp + delta;
-	if (pos > it->timeline->playDuration) {
-		pos = it->timeline->playDuration;
-	}
-	it->executeSeekTimestamp (pos);
+	it->fastSeek (fastSeekInterval);
 }
 void PlayerWindow::rewindButtonClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerWindow *it = (PlayerWindow *) itPtr;
-	int64_t delta, pos;
 
-	delta = it->timeline->playDuration * 33 / 100;
-	if (delta > fastSeekInterval) {
-		delta = fastSeekInterval;
+	if (it->isPlayStarting && (it->playStartSeekEnableClock > 0)) {
+		return;
 	}
-	pos = it->video->playTimestamp - delta;
-	if (pos < 0) {
-		pos = 0;
+	it->fastSeek (-fastSeekInterval);
+}
+
+void PlayerWindow::fastSeek (int64_t seekTimestampDelta) {
+	if (fastSeekTimestamp < 0) {
+		fastSeekTimestamp = video->playTimestamp;
 	}
-	it->executeSeekTimestamp (pos);
+	fastSeekTimestamp += seekTimestampDelta;
+	if (fastSeekTimestamp < 0) {
+		fastSeekTimestamp = 0;
+	}
+	if (fastSeekTimestamp > video->playDuration) {
+		fastSeekTimestamp = video->playDuration;
+	}
+	fastSeekClock = UiConfiguration::instance->activityIconLingerDuration;
+	if (fastSeekTimestamp >= video->playTimestamp) {
+		fastSeekIcon->setIconSprite (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_forwardButton));
+		fastSeekIcon->setIconImageColor (UiConfiguration::instance->darkInverseTextColor);
+	}
+	else {
+		fastSeekIcon->setIconSprite (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_rewindButton));
+		fastSeekIcon->setIconImageColor (UiConfiguration::instance->darkInverseTextColor);
+	}
+	fastSeekIcon->setText (UiText::instance->getTimespanText (fastSeekTimestamp, UiText::instance->getMinTimespanUnit (video->playDuration), true));
+	fastSeekIcon->isVisible = true;
+	reflow ();
 }
 void PlayerWindow::executeSeekTimestamp (int64_t targetTimestamp) {
 	isPlayStarting = true;
+	playStartSeekEnableClock = playStartSeekEnableDelay;
+	isPlayFailed = false;
 	if (! video->isPlaying) {
 		setPlaySeekTimestamp (targetTimestamp);
 		video->setPlayPath (playPath);
@@ -785,29 +862,32 @@ void PlayerWindow::timelineWindowPositionHovered (void *itPtr, Widget *widgetPtr
 	PlayerTimelineWindow *timeline = (PlayerTimelineWindow *) widgetPtr;
 	double t;
 
-	if (it->recordType == SystemInterface::CommandId_MediaItem) {
-		t = -1.0f;
-		if (timeline->hoverSeekPercent >= 0.0f) {
-			t = timeline->hoverSeekPercent / 100.0f * (double) timeline->playDuration;
-		}
-		if (it->targetMedia.isVideo) {
-			it->timelineHoverTimestamp = (int64_t) t;
-			it->timelineHoverClock = UiConfiguration::instance->mouseHoverThreshold;
-		}
-		timeline->setHighlightedPosition ((int64_t) t);
+	t = -1.0f;
+	if (timeline->hoverSeekPercent >= 0.0f) {
+		t = timeline->hoverSeekPercent / 100.0f * (double) timeline->playDuration;
 	}
+	if (it->targetMedia.isVideo) {
+		it->timelineHoverTimestamp = (int64_t) t;
+		it->timelineHoverClock = UiConfiguration::instance->mouseHoverThreshold;
+	}
+	timeline->setHighlightedPosition ((int64_t) t);
 }
 
 void PlayerWindow::timelineWindowPositionClicked (void *itPtr, Widget *widgetPtr) {
 	PlayerWindow *it = (PlayerWindow *) itPtr;
 	PlayerTimelineWindow *timeline = (PlayerTimelineWindow *) widgetPtr;
 
-	if (it->recordType == SystemInterface::CommandId_MediaItem) {
-		it->executeSeekPercent (timeline->clickSeekPercent);
+	if (it->isPlayStarting && (it->playStartSeekEnableClock > 0)) {
+		return;
 	}
+	it->executeSeekPercent (timeline->clickSeekPercent);
+	it->fastSeekIcon->isVisible = false;
+	it->fastSeekTimestamp = -1;
 }
 void PlayerWindow::executeSeekPercent (double targetPercent) {
 	isPlayStarting = true;
+	playStartSeekEnableClock = playStartSeekEnableDelay;
+	isPlayFailed = false;
 	if (! video->isPlaying) {
 		setPlaySeekPercent (targetPercent);
 		video->setPlayPath (playPath);

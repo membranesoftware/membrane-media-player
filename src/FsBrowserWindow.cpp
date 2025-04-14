@@ -31,13 +31,13 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "App.h"
 #include "ClassId.h"
 #include "SpriteId.h"
 #include "OsUtil.h"
 #include "SpriteGroup.h"
 #include "TaskGroup.h"
 #include "Ui.h"
+#include "UiConfiguration.h"
 #include "UiText.h"
 #include "Label.h"
 #include "Image.h"
@@ -46,7 +46,6 @@
 #include "TextFieldWindow.h"
 #include "ScrollViewWindow.h"
 #include "IconLabelWindow.h"
-#include "UiConfiguration.h"
 #include "FsBrowserWindow.h"
 
 // Stage values
@@ -64,6 +63,7 @@ FsBrowserWindow::FsBrowserWindow (double windowWidth, double windowHeight, const
 , stage (Uninitialized)
 , isLoading (false)
 , isFirstLoad (true)
+, isLoadingPathFieldTarget (false)
 , shouldLoadPath (false)
 , loadPathTarget (initialPath)
 , loadPathResult (OpResult::InternalApplicationFailureError)
@@ -243,6 +243,7 @@ void FsBrowserWindow::doUpdate (int msElapsed) {
 						if (pathFieldClock <= 0) {
 							pathFieldClock = UiConfiguration::instance->idleUpdateThreshold;
 							loadPathTarget.assign (val);
+							isLoadingPathFieldTarget = true;
 							startLoad ();
 							stage = LoadWaiting;
 							break;
@@ -275,7 +276,6 @@ void FsBrowserWindow::loadPath (void *itPtr) {
 	it->isLoading = false;
 	it->release ();
 }
-
 void FsBrowserWindow::executeLoadPath () {
 	StdString dirpath, filepath;
 	StringList filenames, nextfilepaths;
@@ -425,9 +425,20 @@ void FsBrowserWindow::showLoadState () {
 		}
 	}
 	pathField->setValue (browsePath);
-
 	componentButtonPanel->reflow ();
 	componentPanel->reflow ();
+
+	if (isLoadingPathFieldTarget && (! browsePath.empty ())) {
+		if (loadPathResult != OpResult::Success) {
+			setSelectedPath (StdString ());
+		}
+		else {
+			if ((selectType == FsBrowserWindow::SelectDirectories) || (selectType == FsBrowserWindow::SelectFilesAndDirectories)) {
+				setSelectedPath (browsePath);
+			}
+		}
+	}
+	isLoadingPathFieldTarget = false;
 	reflow ();
 }
 

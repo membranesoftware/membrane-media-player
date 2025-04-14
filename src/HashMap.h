@@ -76,6 +76,7 @@ public:
 
 	// Read values from configuration file data and store the resulting items in the map, optionally clearing the map before doing so. Returns a Result value.
 	OpResult read (const StdString &filename, bool shouldClear = false);
+	OpResult read (SDL_RWops *rw, bool shouldClear = false);
 
 	// Write values from the map to the specified file. Returns a Result value.
 	OpResult write (const StdString &filename);

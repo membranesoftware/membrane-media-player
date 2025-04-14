@@ -41,6 +41,7 @@
 
 class Sprite;
 class TooltipWindow;
+class Video;
 class Ui;
 class StringList;
 class Panel;
@@ -66,10 +67,6 @@ public:
 
 	// Clear static instance data
 	static void freeInstance ();
-
-	// Key values for the prefs map
-	static constexpr const char *showClockKey = "UiStackA";
-	static constexpr const char *windowSizeSettingKey = "UiStackB";
 
 	// Read-only data members
 	bool isMouseHoverActive;
@@ -160,6 +157,15 @@ public:
 	// Deactivate the mouse hover widget and prevent reactivation until a new mouse hover widget is acquired
 	void suspendMouseHover ();
 
+	// Return a newly created video widget for embedded display in an interface element. The object returned by this method must be released when no longer needed.
+	Video *createVideoEmbed (double videoWidth, double videoHeight, const StdString &playPath, bool isResourcePlayPath, int soundMixVolume, bool isSoundMuted, bool isPlayLoop = false, int64_t playSeekTimestamp = 0);
+
+	// Stop and remove all previously created video embeds
+	void clearVideoEmbeds ();
+
+	// Stop and remove a previously created video embed
+	void removeVideoEmbed (Video *video);
+
 	// Return the number of players in the view
 	int getPlayerCount ();
 
@@ -175,8 +181,11 @@ public:
 	// Write current PlayerControl option values into the provided pointers
 	void getPlayerControlOptions (int *soundMixVolume = NULL, bool *isSoundMuted = NULL, int *visualizerType = NULL, bool *isSubtitleEnabled = NULL);
 
-	// Start playback of a media item
-	void playMedia (const StdString &mediaId, int64_t seekTimestamp = 0, bool isDetached = false);
+	// Start playback of a file path target
+	void playMediaPath (const StdString &playPath, int64_t seekTimestamp = 0, bool isDetached = false);
+
+	// Start playback of a MediaItem record
+	void playMediaItem (const StdString &mediaId, int64_t seekTimestamp = 0, bool isDetached = false);
 
 	// Start playback of a media playlist
 	void playPlaylist (MediaPlaylistWindow *playlist);
@@ -196,7 +205,10 @@ public:
 	// Execute the stop operation for the specified playlist player
 	void stopPlaylist (const StdString &playlistId);
 
+private:
 	// Callback functions
+	static void videoEmbedPlayEnded (void *itPtr, Widget *widgetPtr);
+	void executeVideoEmbedPlayEnded (Video *video);
 	static void appMenuButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void backButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void settingsActionClicked (void *itPtr, Widget *widgetPtr);
@@ -209,8 +221,8 @@ public:
 	static void imageDialogLoaded (void *itPtr, Widget *widgetPtr);
 	static void consoleTextEntered (void *itPtr, Widget *widgetPtr);
 	static void consoleFileRun (void *itPtr, Widget *widgetPtr);
+	static void logWindowClearClicked (void *itPtr, Widget *widgetPtr);
 
-private:
 	// Execute operations appropriate when mouseHoverTarget has held its current value beyond the hover threshold
 	void activateMouseHover ();
 
@@ -279,5 +291,17 @@ private:
 	double pointerOffsetScaleY;
 	Color pointerColor;
 	SDL_mutex *pointerMutex;
+
+	struct VideoEmbed {
+		Video *video;
+		bool isPlayLoop;
+		int64_t playSeekTimestamp;
+		VideoEmbed ():
+			video (NULL),
+			isPlayLoop (false),
+			playSeekTimestamp (0) { }
+	};
+	SDL_mutex *videoEmbedMutex;
+	std::list<UiStack::VideoEmbed> videoEmbedList;
 };
 #endif

@@ -481,7 +481,7 @@ Widget *CardView::addItem (Panel *itemPanel, int rowNumber, bool shouldSkipReflo
 	return (addItem (itemPanel, StdString (), rowNumber, shouldSkipReflow));
 }
 
-void CardView::removeItem (const StdString &itemId, bool shouldSkipReflow) {
+bool CardView::removeItem (const StdString &itemId, bool shouldSkipReflow) {
 	std::list<CardView::Item>::iterator pos;
 	bool found;
 
@@ -500,9 +500,21 @@ void CardView::removeItem (const StdString &itemId, bool shouldSkipReflow) {
 	if (found && (! shouldSkipReflow)) {
 		reflow ();
 	}
+	return (found);
 }
-void CardView::removeItem (const char *itemId, bool shouldSkipReflow) {
-	removeItem (StdString (itemId), shouldSkipReflow);
+bool CardView::removeItem (const char *itemId, bool shouldSkipReflow) {
+	return (removeItem (StdString (itemId), shouldSkipReflow));
+}
+bool CardView::removeItem (Widget *itemWidget, bool shouldSkipReflow) {
+	StdString id;
+	bool found;
+
+	found = false;
+	id = findItemId (CardView::matchPointerValue, itemWidget);
+	if (! id.empty ()) {
+		found = removeItem (id, shouldSkipReflow);
+	}
+	return (found);
 }
 
 void CardView::removeRowItems (int row) {

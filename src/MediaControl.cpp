@@ -32,13 +32,14 @@
 */
 #include "Config.h"
 #include "App.h"
+#include "ClassId.h"
 #include "SdlUtil.h"
+#include "PrefsKey.h"
 #include "StringList.h"
 #include "OsUtil.h"
 #include "MediaUtil.h"
 #include "Log.h"
 #include "UiLog.h"
-#include "AppNews.h"
 #include "UiText.h"
 #include "Prng.h"
 #include "TaskGroup.h"
@@ -51,35 +52,54 @@
 #include "PlayMarker.h"
 #include "MediaPlaylist.h"
 #include "MediaReader.h"
+#include "MediaControlTask.h"
 #include "MediaControl.h"
 
 MediaControl *MediaControl::instance = NULL;
 
 constexpr const char *databaseName = "media.db";
-constexpr const char *metadataTableName = "MediaMetadata";
 constexpr const int metadataVersion = 1;
 constexpr const char *thumbnailDirectoryName = "thumbnail";
 constexpr const double writeThumbnailImagesProgressPercent = 95.0f;
-constexpr const int uiLogMaxMessageAge = (30 * 86400);
 
 MediaControl::MediaControl ()
 : isStopped (false)
 , isReady (false)
-, isConfigured (false)
-, mediaThumbnailCount (MediaControl::defaultMediaThumbnailCount)
-, configureMediaThumbnailCount (MediaControl::defaultMediaThumbnailCount)
+, isFilescanConfigured (false)
 , isTaskCancelled (false)
+, playHistorySize (0)
 {
 	SdlUtil::createMutex (&statusMutex);
+	SdlUtil::createMutex (&databasePathMutex);
 	SdlUtil::createMutex (&taskListMutex);
+	SdlUtil::createMutex (&playHistoryMutex);
+	SdlUtil::createMutex (&playHistoryCallbackMutex);
 }
 MediaControl::~MediaControl () {
+	std::list<MediaControlTask *>::const_iterator i1, i2;
+
+	SDL_LockMutex (taskListMutex);
+	i1 = taskList.cbegin ();
+	i2 = taskList.cend ();
+	while (i1 != i2) {
+		(*i1)->release ();
+		++i1;
+	}
+	taskList.clear ();
+	SDL_UnlockMutex (taskListMutex);
+
+	SDL_LockMutex (databasePathMutex);
 	if (! databasePath.empty ()) {
 		Database::instance->close (databasePath);
 		databasePath.assign ("");
 	}
+	SDL_UnlockMutex (databasePathMutex);
+
 	SdlUtil::destroyMutex (&statusMutex);
+	SdlUtil::destroyMutex (&databasePathMutex);
 	SdlUtil::destroyMutex (&taskListMutex);
+	SdlUtil::destroyMutex (&playHistoryMutex);
+	SdlUtil::destroyMutex (&playHistoryCallbackMutex);
 }
 
 void MediaControl::createInstance () {
@@ -98,69 +118,62 @@ OpResult MediaControl::start () {
 	HashMap *prefs;
 
 	prefs = App::instance->lockPrefs ();
-	agentId = prefs->find (MediaControl::agentIdKey, "");
-	prefs->find (MediaControl::mediaSourcePathKey, &mediaSourcePath);
-	dataPath = prefs->find (MediaControl::dataPathKey, "");
-	mediaThumbnailCount = prefs->find (MediaControl::mediaThumbnailCountKey, MediaControl::defaultMediaThumbnailCount);
+	agentId = prefs->find (PrefsKey::agentId, "");
+	mainOptions.savePlayHistory = prefs->find (PrefsKey::savePlayHistory, false);
+	mainOptions.savePlaylists = prefs->find (PrefsKey::savePlaylists, false);
+	mainOptions.mediaScan = prefs->find (PrefsKey::mediaScan, false);
+	mainOptions.dataPath = prefs->find (PrefsKey::mediaDataPath, "");
+	prefs->find (PrefsKey::mediaFilescanPath, &(filescanOptions.scanPath));
+	filescanOptions.mediaThumbnailCount = prefs->find (PrefsKey::mediaThumbnailCount, MediaControl::defaultMediaThumbnailCount);
 	App::instance->unlockPrefs ();
 
 	if (agentId.empty ()) {
 		agentId = Prng::instance->getUuid ();
 		prefs = App::instance->lockPrefs ();
-		prefs->insert (MediaControl::agentIdKey, agentId);
+		prefs->insert (PrefsKey::agentId, agentId);
 		App::instance->unlockPrefs ();
 	}
 
+	isStopped = false;
+	isTaskCancelled = false;
 	isReady = false;
-	isConfigured = false;
-	if ((! mediaSourcePath.empty ()) && (! dataPath.empty ())) {
-		isConfigured = true;
+
+	if (mainOptions.dataPath.empty ()) {
+		mainOptions.savePlayHistory = false;
+		mainOptions.savePlaylists = false;
+		mainOptions.mediaScan = false;
 	}
-	if (isConfigured) {
-		runTask (MediaControl::ReadyTask);
+
+	isFilescanConfigured = false;
+	if (! filescanOptions.scanPath.empty ()) {
+		isFilescanConfigured = true;
 	}
+
+	addTask (new MediaControlReadyTask ());
 	return (OpResult::Success);
 }
 
 void MediaControl::stop () {
+	StringList ids;
+
 	isStopped = true;
 	isTaskCancelled = true;
-}
 
-OpResult MediaControl::openDatabase () {
-	OpResult result;
-	int version;
-
-	if (databasePath.empty ()) {
-		return (OpResult::InvalidConfigurationError);
-	}
-	result = Database::instance->open (databasePath);
-	if (result == OpResult::Success) {
-		result = Database::instance->exec (databasePath, MediaItem::createTableSql);
-	}
-	if (result == OpResult::Success) {
-		result = Database::instance->exec (databasePath, PlayMarker::createTableSql);
-	}
-	if (result == OpResult::Success) {
-		result = Database::instance->exec (databasePath, MediaPlaylist::createTableSql);
-	}
-	if (result == OpResult::Success) {
-		result = Database::instance->createMetadataTable (databasePath, StdString (metadataTableName));
-	}
-	if (result == OpResult::Success) {
-		version = Database::instance->readMetadataVersion (databasePath, StdString (metadataTableName));
-		if (version < metadataVersion) {
-			Database::instance->writeMetadataVersion (databasePath, StdString (metadataTableName), metadataVersion);
-		}
-	}
-	return (result);
+	UiLog::instance->removeListener (this);
+	SDL_LockMutex (playHistoryMutex);
+	ids.assign (playHistoryRecordIds);
+	playHistoryRecordIds.clear ();
+	playHistoryMediaPathMap.clear ();
+	playHistorySize = 0;
+	SDL_UnlockMutex (playHistoryMutex);
+	RecordStore::instance->remove (ids);
 }
 
 StdString MediaControl::getThumbnailPath (const StdString &mediaId, int64_t thumbnailTimestamp) {
-	if (mediaId.empty () || (thumbnailTimestamp < 0)) {
+	if (mediaId.empty () || (thumbnailTimestamp < 0) || mainOptions.dataPath.empty ()) {
 		return (StdString ());
 	}
-	return (OsUtil::getJoinedPath (dataPath, mediaId, StdString (thumbnailDirectoryName), StdString::createSprintf ("%lli.jpg", (long long int) thumbnailTimestamp)));
+	return (OsUtil::getJoinedPath (mainOptions.dataPath, mediaId, StdString (thumbnailDirectoryName), StdString::createSprintf ("%lli.jpg", (long long int) thumbnailTimestamp)));
 }
 
 void MediaControl::lockStatus () {
@@ -178,7 +191,7 @@ void MediaControl::getStatus (MediaControl::Status *destStatus, int taskType, Me
 	if (destStatus) {
 		*destStatus = status;
 	}
-	if ((taskType != MediaControl::NoTask) && taskResult) {
+	if ((taskType >= 0) && taskResult) {
 		pos = taskResultMap.find (taskType);
 		if (pos == taskResultMap.end ()) {
 			*taskResult = MediaControl::TaskResult ();
@@ -223,7 +236,8 @@ void MediaControl::clearTaskResult (int taskType) {
 }
 
 void MediaControl::update (int msElapsed) {
-	std::list<MediaControl::Task>::iterator t;
+	std::list<MediaControlTask *>::const_iterator i;
+	MediaControlTask *task;
 	MediaControl::Status updatestatus;
 	bool shouldupdatestatus;
 
@@ -231,15 +245,17 @@ void MediaControl::update (int msElapsed) {
 	getStatus (&updatestatus);
 	SDL_LockMutex (taskListMutex);
 	if (! taskList.empty ()) {
-		t = taskList.begin ();
-		if (t->isEnded) {
-			taskList.erase (t);
+		i = taskList.cbegin ();
+		task = *i;
+		if (task->isEnded) {
+			taskList.erase (i);
+			task->release ();
 			shouldupdatestatus = true;
 		}
 		if (taskList.empty ()) {
 			if (updatestatus.isTaskRunning) {
 				updatestatus.isTaskRunning = false;
-				updatestatus.taskType = MediaControl::NoTask;
+				updatestatus.taskType = -1;
 				updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Ready).capitalized ());
 				shouldupdatestatus = true;
 			}
@@ -250,66 +266,19 @@ void MediaControl::update (int msElapsed) {
 				shouldupdatestatus = true;
 			}
 
-			t = taskList.begin ();
-			if (! t->isRunning) {
+			i = taskList.cbegin ();
+			task = *i;
+			if (! task->isRunning) {
 				isTaskCancelled = false;
-				t->isRunning = true;
-				switch (t->taskType) {
-					case MediaControl::PrimeTask: {
-						updatestatus.taskType = t->taskType;
-						updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Configuring).capitalized ());
-						updatestatus.taskText1.assign (UiText::instance->getText (UiTextId::Configuring).capitalized ());
-						updatestatus.taskText2.assign ("");
-						updatestatus.taskProgressPercent = -1.0f;
-						shouldupdatestatus = true;
-						TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::applyPrimeSettings, this));
-						break;
-					}
-					case MediaControl::ReadyTask: {
-						updatestatus.taskType = t->taskType;
-						updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Initializing).capitalized ());
-						updatestatus.taskText1.assign (UiText::instance->getText (UiTextId::Initializing).capitalized ());
-						updatestatus.taskText2.assign ("");
-						updatestatus.taskProgressPercent = -1.0f;
-						shouldupdatestatus = true;
-						TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::readyMediaControl, this));
-						break;
-					}
-					case MediaControl::ScanTask: {
-						updatestatus.taskType = t->taskType;
-						updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Scanning).capitalized ());
-						updatestatus.taskText1.assign (UiText::instance->getText (UiTextId::Scanning).capitalized ());
-						updatestatus.taskText2.assign ("");
-						updatestatus.taskProgressPercent = -1.0f;
-						shouldupdatestatus = true;
-						TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::scanMediaFiles, this));
-						break;
-					}
-					case MediaControl::CleanTask: {
-						updatestatus.taskType = t->taskType;
-						updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Cleaning).capitalized ());
-						updatestatus.taskText1.assign (UiText::instance->getText (UiTextId::Cleaning).capitalized ());
-						updatestatus.taskText2.assign ("");
-						updatestatus.taskProgressPercent = -1.0f;
-						shouldupdatestatus = true;
-						TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::cleanMediaData, this));
-						break;
-					}
-					case MediaControl::ConfigureTask: {
-						updatestatus.taskType = t->taskType;
-						updatestatus.statusText.assign (UiText::instance->getText (UiTextId::Configuring).capitalized ());
-						updatestatus.taskText1.assign ("");
-						updatestatus.taskText2.assign ("");
-						updatestatus.taskProgressPercent = -1.0f;
-						shouldupdatestatus = true;
-						TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::applyConfigureSettings, this));
-						break;
-					}
-					default: {
-						t->isEnded = true;
-						break;
-					}
-				}
+				task->isRunning = true;
+
+				updatestatus.taskType = task->classId;
+				updatestatus.statusText.assign (task->statusText);
+				updatestatus.taskText1.assign (task->taskText1);
+				updatestatus.taskText2.assign (task->taskText2);
+				updatestatus.taskProgressPercent = -1.0f;
+				shouldupdatestatus = true;
+				TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::executeTask, this));
 			}
 		}
 	}
@@ -327,8 +296,74 @@ void MediaControl::update (int msElapsed) {
 	}
 }
 
-bool MediaControl::isRunningTask (int taskType) {
-	std::list<MediaControl::Task>::const_iterator i1, i2;
+void MediaControl::executeTask (void *itPtr) {
+	MediaControl *it = (MediaControl *) itPtr;
+	std::list<MediaControlTask *>::const_iterator i;
+	MediaControlTask *task;
+
+	task = NULL;
+	SDL_LockMutex (it->taskListMutex);
+	if (! it->taskList.empty ()) {
+		i = it->taskList.cbegin ();
+		task = *i;
+		task->retain ();
+	}
+	SDL_UnlockMutex (it->taskListMutex);
+	if (! task) {
+		return;
+	}
+	switch (task->classId) {
+		case ClassId::MediaControlConfigureMainTask: {
+			it->executeConfigureMain ((MediaControlConfigureMainTask *) task);
+			break;
+		}
+		case ClassId::MediaControlConfigureFilescanTask: {
+			it->executeConfigureFilescan ((MediaControlConfigureFilescanTask *) task);
+			break;
+		}
+		case ClassId::MediaControlReadyTask: {
+			it->executeReady ((MediaControlReadyTask *) task);
+			break;
+		}
+		case ClassId::MediaControlFilescanTask: {
+			it->executeFilescan ((MediaControlFilescanTask *) task);
+			break;
+		}
+		case ClassId::MediaControlCleanFilescanTask: {
+			it->executeCleanFilescan ((MediaControlCleanFilescanTask *) task);
+			break;
+		}
+	}
+	it->endTask (task);
+	task->release ();
+}
+
+void MediaControl::endTask (MediaControlTask *task) {
+	std::map<int, MediaControl::TaskResult>::iterator i;
+
+	if (! task->logErrorMessage.empty ()) {
+		Log::debug ("Task error: taskType=%i %s", task->classId, task->logErrorMessage.c_str ());
+	}
+	if (! task->uiLogMessage.empty ()) {
+		UiLog::write (UiLog::NoOptions, "%s", task->uiLogMessage.c_str ());
+	}
+	lockStatus ();
+	status.taskText1.assign ("");
+	status.taskText2.assign ("");
+	status.taskProgressPercent = -1.0f;
+	i = taskResultMap.find (task->classId);
+	if (i == taskResultMap.end ()) {
+		taskResultMap.insert (std::pair<int, MediaControl::TaskResult> (task->classId, MediaControl::TaskResult (task->isSuccess, task->resultText1, task->resultText2)));
+	}
+	else {
+		i->second = MediaControl::TaskResult (task->isSuccess, task->resultText1, task->resultText2);
+	}
+	unlockStatus ();
+	task->isEnded = true;
+}
+
+bool MediaControl::isTaskRunning (int classId) {
+	std::list<MediaControlTask *>::const_iterator i1, i2;
 	bool result;
 
 	result = false;
@@ -336,7 +371,7 @@ bool MediaControl::isRunningTask (int taskType) {
 	i1 = taskList.cbegin ();
 	i2 = taskList.cend ();
 	while (i1 != i2) {
-		if (i1->taskType == taskType) {
+		if ((*i1)->classId == classId) {
 			result = true;
 			break;
 		}
@@ -346,70 +381,49 @@ bool MediaControl::isRunningTask (int taskType) {
 	return (result);
 }
 
-void MediaControl::endTask (int taskType, const StdString &resultText1, const StdString &resultText2, const StdString &uiLogMessage, const char *logErrorMessage) {
-	std::list<MediaControl::Task>::iterator i;
-	std::map<int, MediaControl::TaskResult>::iterator j;
-
-	if (logErrorMessage) {
-		Log::debug ("Task error: taskType=%i %s", taskType, logErrorMessage);
-	}
-	if (! uiLogMessage.empty ()) {
-		UiLog::instance->write (0, "%s", uiLogMessage.c_str ());
-	}
-	lockStatus ();
-	status.taskText1.assign ("");
-	status.taskText2.assign ("");
-	status.taskProgressPercent = -1.0f;
-	j = taskResultMap.find (taskType);
-	if (j == taskResultMap.end ()) {
-		taskResultMap.insert (std::pair<int, MediaControl::TaskResult> (taskType, MediaControl::TaskResult (resultText1, resultText2)));
-	}
-	else {
-		j->second = MediaControl::TaskResult (resultText1, resultText2);
-	}
-	unlockStatus ();
-
-	SDL_LockMutex (taskListMutex);
-	if (! taskList.empty ()) {
-		i = taskList.begin ();
-		i->isEnded = true;
-	}
-	SDL_UnlockMutex (taskListMutex);
-}
-
-void MediaControl::runTask (int taskType) {
-	if (isRunningTask (taskType)) {
+void MediaControl::addTask (MediaControlTask *task) {
+	task->retain ();
+	if (isTaskRunning (task->classId)) {
+		task->release ();
 		return;
 	}
+
 	lockStatus ();
-	taskResultMap.erase (taskType);
+	taskResultMap.erase (task->classId);
 	unlockStatus ();
 
+	task->isRunning = false;
+	task->isEnded = false;
 	SDL_LockMutex (taskListMutex);
-	taskList.push_back (MediaControl::Task (taskType));
+	taskList.push_back (task);
 	SDL_UnlockMutex (taskListMutex);
 }
 
 void MediaControl::cancelTask (int taskType) {
-	std::list<MediaControl::Task>::iterator i1, i2;
+	std::list<MediaControlTask *>::const_iterator i1, i2;
+	MediaControlTask *task;
 
 	SDL_LockMutex (taskListMutex);
 	if (! taskList.empty ()) {
-		i1 = taskList.begin ();
-		i2 = taskList.end ();
-		if (i1->taskType == taskType) {
-			if (i1->isRunning) {
+		i1 = taskList.cbegin ();
+		i2 = taskList.cend ();
+		task = *i1;
+		if (task->classId == taskType) {
+			if (task->isRunning) {
 				isTaskCancelled = true;
 			}
 			else {
 				taskList.erase (i1);
+				task->release ();
 			}
 		}
 		else {
 			++i1;
 			while (i1 != i2) {
-				if (i1->taskType == taskType) {
+				task = *i1;
+				if (task->classId == taskType) {
 					taskList.erase (i1);
+					task->release ();
 					break;
 				}
 				++i1;
@@ -419,219 +433,331 @@ void MediaControl::cancelTask (int taskType) {
 	SDL_UnlockMutex (taskListMutex);
 }
 
-void MediaControl::prime (const StdString &mediaSourcePathValue, const StdString &dataPathValue) {
-	if (isRunningTask (MediaControl::PrimeTask)) {
-		return;
-	}
-	primeMediaSourcePath.assign (mediaSourcePathValue);
-	primeDataPath.assign (dataPathValue);
-	runTask (MediaControl::PrimeTask);
-}
-void MediaControl::applyPrimeSettings (void *itPtr) {
-	MediaControl *it = (MediaControl *) itPtr;
-
-	it->executeApplyPrimeSettings ();
-}
-void MediaControl::executeApplyPrimeSettings () {
-	HashMap *prefs;
-
-	if (! OsUtil::directoryExists (primeMediaSourcePath)) {
-		endTask (MediaControl::PrimeTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaSourceDirectoryNotFoundErrorText));
-		return;
-	}
-	if (! OsUtil::directoryExists (primeDataPath)) {
-		endTask (MediaControl::PrimeTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::DataDirectoryNotFoundErrorText));
-		return;
-	}
-	mediaSourcePath.assign (StringList (primeMediaSourcePath));
-	dataPath.assign (primeDataPath);
-	prefs = App::instance->lockPrefs ();
-	prefs->insert (MediaControl::mediaSourcePathKey, mediaSourcePath);
-	prefs->insert (MediaControl::dataPathKey, dataPath);
-	App::instance->unlockPrefs ();
-
-	primeMediaSourcePath.assign ("");
-	primeDataPath.assign ("");
-	CaptureWriter::instance->setBaseWritePath (dataPath);
-	isConfigured = true;
-	runTask (MediaControl::ReadyTask);
-	endTask (MediaControl::PrimeTask, StdString ("Configuration complete"));
-}
-
-void MediaControl::readyMediaControl (void *itPtr) {
-	MediaControl *it = (MediaControl *) itPtr;
-
-	it->executeReadyMediaControl ();
-}
-void MediaControl::executeReadyMediaControl () {
+OpResult MediaControl::openDatabase (StdString *pathValue) {
+	StdString path;
 	OpResult result;
-	StdString errmsg;
-	int mediacount;
-	bool dbexists;
 
-	if (! databasePath.empty ()) {
-		Database::instance->close (databasePath);
+	if (! isReady) {
+		return (OpResult::InvalidStateError);
 	}
-	databasePath = OsUtil::getJoinedPath (dataPath, databaseName);
-	dbexists = OsUtil::fileExists (databasePath);
-	result = openDatabase ();
+	SDL_LockMutex (databasePathMutex);
+	path.assign (databasePath);
+	SDL_UnlockMutex (databasePathMutex);
+	if (path.empty ()) {
+		return (OpResult::InvalidStateError);
+	}
+	result = Database::instance->open (path);
 	if (result != OpResult::Success) {
-		endTask (MediaControl::ReadyTask, UiText::instance->getText (UiTextId::MediaControlReadyErrorText), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), StdString::createSprintf ("Failed to open media database; databasePath=\"%s\" err=%i", databasePath.c_str (), result).c_str ());
-		return;
+		return (result);
 	}
-	mediacount = MediaItem::countDatabaseRecords (databasePath, &errmsg);
-	if (mediacount < 0) {
-		endTask (MediaControl::ReadyTask, UiText::instance->getText (UiTextId::MediaControlReadyErrorText), UiText::instance->getText (UiTextId::MediaControlReadDataErrorText), StdString (), errmsg.c_str ());
-		return;
+	if (pathValue) {
+		pathValue->assign (path);
 	}
-	UiLog::instance->configure (OsUtil::getJoinedPath (dataPath, StdString (UiLog::databaseName)), uiLogMaxMessageAge);
-	AppNews::instance->configure (OsUtil::getJoinedPath (dataPath, StdString (UiLog::databaseName)));
-	CaptureWriter::instance->setBaseWritePath (dataPath);
-	isReady = true;
-	lockStatus ();
-	status.statusText.assign (UiText::instance->getText (UiTextId::Ready).capitalized ());
-	status.mediaCount = mediacount;
-	unlockStatus ();
-	if (! dbexists) {
-		scan ();
-	}
-	endTask (MediaControl::ReadyTask, UiText::instance->getText (UiTextId::Ready).capitalized ());
+	return (OpResult::Success);
 }
 
-bool MediaControl::matchConfiguration (const StringList &mediaSourcePathValue, const StdString &dataPathValue, int mediaThumbnailCountValue) {
-	if (! mediaSourcePathValue.equals (mediaSourcePath)) {
+void MediaControl::execDatabase (const StringList &sql) {
+	StdString path;
+	MediaControlDatabaseExecTask *task;
+
+	if (sql.empty () || (! isReady)) {
+		return;
+	}
+	SDL_LockMutex (databasePathMutex);
+	path.assign (databasePath);
+	SDL_UnlockMutex (databasePathMutex);
+	if (path.empty ()) {
+		return;
+	}
+	task = new MediaControlDatabaseExecTask (path, sql);
+	task->retain ();
+	TaskGroup::instance->run (TaskGroup::RunContext (MediaControl::executeDatabaseExec, task, App::databaseWriteQueueId));
+}
+
+bool MediaControl::matchMainConfiguration (const MainOptions &options) {
+	if (options.savePlayHistory != mainOptions.savePlayHistory) {
 		return (false);
 	}
-	if (! dataPathValue.equals (dataPath)) {
+	if (options.savePlaylists != mainOptions.savePlaylists) {
 		return (false);
 	}
-	if (mediaThumbnailCountValue != mediaThumbnailCount) {
+	if (options.mediaScan != mainOptions.mediaScan) {
+		return (false);
+	}
+	if (! options.dataPath.equals (mainOptions.dataPath)) {
 		return (false);
 	}
 	return (true);
 }
 
-void MediaControl::configure (const StringList &mediaSourcePathValue, const StdString &dataPathValue, int mediaThumbnailCountValue) {
-	if (isRunningTask (MediaControl::ConfigureTask)) {
-		return;
-	}
-	configureMediaSourcePath.assign (mediaSourcePathValue);
-	configureDataPath.assign (dataPathValue);
-	configureMediaThumbnailCount = mediaThumbnailCountValue;
-	runTask (MediaControl::ConfigureTask);
+void MediaControl::configureMain (const MediaControl::MainOptions &options) {
+	addTask (new MediaControlConfigureMainTask (options));
 }
-void MediaControl::applyConfigureSettings (void *itPtr) {
-	MediaControl *it = (MediaControl *) itPtr;
-
-	it->executeApplyConfigureSettings ();
-}
-void MediaControl::executeApplyConfigureSettings () {
-	StringList files;
-	StringList::const_iterator i1, i2;
-	StdString path, errmsg, prevpath;
-	OpResult result;
+void MediaControl::executeConfigureMain (MediaControlConfigureMainTask *task) {
 	HashMap *prefs;
+	StdString dbpath;
 
-	if (! dataPath.equals (configureDataPath)) {
-		if (! OsUtil::directoryExists (configureDataPath)) {
-			endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::DataDirectoryNotFoundErrorText));
+	if (matchMainConfiguration (task->options)) {
+		prefs = App::instance->lockPrefs ();
+		prefs->insert (PrefsKey::skipPrimePanel, true);
+		App::instance->unlockPrefs ();
+		task->setResult (true, UiText::instance->getText (UiTextId::ConfigurationUpdated).capitalized ());
+		return;
+	}
+	if (task->options.savePlayHistory || task->options.savePlaylists || task->options.mediaScan) {
+		if (task->options.dataPath.empty ()) {
+			task->setResult (false, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::DataDirectoryNotFoundErrorText));
+			return;
+		}
+		if (! OsUtil::directoryExists (task->options.dataPath)) {
+			task->setResult (false, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::DataDirectoryNotFoundErrorText));
 			return;
 		}
 	}
-	result = OsUtil::readDirectory (dataPath, &files);
-	if (result != OpResult::Success) {
-		endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlReadDataErrorText));
-		return;
-	}
-	result = Database::instance->exec (databasePath, PlayMarker::getDeleteAllSql (), &errmsg);
-	if (result != OpResult::Success) {
-		endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), errmsg.c_str ());
-		return;
-	}
-	result = Database::instance->exec (databasePath, MediaPlaylist::getDeleteAllSql (), &errmsg);
-	if (result != OpResult::Success) {
-		endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), errmsg.c_str ());
-		return;
-	}
-	result = Database::instance->exec (databasePath, MediaItem::getDeleteAllSql (), &errmsg);
-	if (result != OpResult::Success) {
-		endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), errmsg.c_str ());
-		return;
-	}
-
-	i1 = files.cbegin ();
-	i2 = files.cend ();
-	while (i1 != i2) {
-		path = *i1;
-		++i1;
-		if ((! path.isUuid ()) || (RecordStore::instance->getRecordIdCommand (path) != SystemInterface::CommandId_MediaItem)) {
-			continue;
+	if (! mainOptions.dataPath.equals (task->options.dataPath)) {
+		SDL_LockMutex (databasePathMutex);
+		dbpath.assign (databasePath);
+		databasePath.assign ("");
+		SDL_UnlockMutex (databasePathMutex);
+		if (! dbpath.empty ()) {
+			Database::instance->close (dbpath);
+			OsUtil::removeFile (dbpath);
 		}
-		path = OsUtil::getJoinedPath (dataPath, path);
-		result = OsUtil::removeDirectory (path, true);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to remove data directory; path=\"%s\"", path.c_str ());
+		if (! mainOptions.dataPath.empty ()) {
+			removeMediaItemDirectories (mainOptions.dataPath);
+			OsUtil::removeFile (OsUtil::getJoinedPath (mainOptions.dataPath, databaseName));
 		}
 	}
 
-	if (! dataPath.equals (configureDataPath)) {
-		prevpath = OsUtil::getJoinedPath (dataPath, StdString (UiLog::databaseName));
-		result = UiLog::instance->setDatabasePath (OsUtil::getJoinedPath (configureDataPath, StdString (UiLog::databaseName)));
-		if (result != OpResult::Success) {
-			endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), StdString::createSprintf ("Failed to create data file; err=%i", result).c_str ());
-			return;
-		}
-		AppNews::instance->configure (OsUtil::getJoinedPath (configureDataPath, StdString (UiLog::databaseName)));
-		result = OsUtil::removeFile (prevpath);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to remove database file; path=\"%s\"", prevpath.c_str ());
-		}
-
-		prevpath.assign (databasePath);
-		if (! databasePath.empty ()) {
-			Database::instance->close (databasePath);
-		}
-		databasePath = OsUtil::getJoinedPath (configureDataPath, databaseName);
-		result = openDatabase ();
-		if (result != OpResult::Success) {
-			endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), StdString::createSprintf ("Failed to open media database; databasePath=\"%s\" err=%i", databasePath.c_str (), result).c_str ());
-			return;
-		}
-		result = OsUtil::removeFile (prevpath);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to remove database file; path=\"%s\"", prevpath.c_str ());
-		}
-	}
-
-	mediaSourcePath.assign (configureMediaSourcePath);
-	dataPath.assign (configureDataPath);
-	mediaThumbnailCount = configureMediaThumbnailCount;
-	configureMediaSourcePath.clear ();
-	configureDataPath.assign ("");
-	configureMediaThumbnailCount = MediaControl::defaultMediaThumbnailCount;
+	mainOptions = task->options;
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (MediaControl::mediaSourcePathKey, mediaSourcePath);
-	prefs->insert (MediaControl::dataPathKey, dataPath);
-	prefs->insert (MediaControl::mediaThumbnailCountKey, mediaThumbnailCount, MediaControl::defaultMediaThumbnailCount);
+	prefs->insert (PrefsKey::savePlayHistory, mainOptions.savePlayHistory, false);
+	prefs->insert (PrefsKey::savePlaylists, mainOptions.savePlaylists, false);
+	prefs->insert (PrefsKey::mediaScan, mainOptions.mediaScan, false);
+	prefs->insert (PrefsKey::mediaDataPath, mainOptions.dataPath, "");
+	prefs->insert (PrefsKey::skipPrimePanel, true);
 	App::instance->unlockPrefs ();
-	CaptureWriter::instance->setBaseWritePath (dataPath);
 
+	task->setResult (true, UiText::instance->getText (UiTextId::ConfigurationUpdated).capitalized ());
+	isReady = false;
+	addTask (new MediaControlReadyTask ());
+}
+
+bool MediaControl::matchFilescanConfiguration (const MediaControl::FilescanOptions &options) {
+	if (! options.scanPath.equals (filescanOptions.scanPath)) {
+		return (false);
+	}
+	if (options.mediaThumbnailCount != filescanOptions.mediaThumbnailCount) {
+		return (false);
+	}
+	return (true);
+}
+void MediaControl::configureFilescan (const MediaControl::FilescanOptions &options) {
+	addTask (new MediaControlConfigureFilescanTask (options));
+}
+void MediaControl::executeConfigureFilescan (MediaControlConfigureFilescanTask *task) {
+	HashMap *prefs;
+	StdString dbpath, errmsg, basepath;
+	OpResult result;
+
+	if (matchFilescanConfiguration (task->options)) {
+		task->setResult (true, UiText::instance->getText (UiTextId::ConfigurationUpdated).capitalized ());
+		return;
+	}
+	if (task->options.scanPath.empty ()) {
+		task->setResult (false, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaSourceDirectoryNotFoundErrorText));
+		return;
+	}
+	basepath.assign (mainOptions.dataPath);
+	if (basepath.empty ()) {
+		task->setResult (false, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::DataDirectoryNotFoundErrorText));
+		return;
+	}
+	result = openDatabase (&dbpath);
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (dbpath, PlayMarker::getDeleteAllSql (MediaControl::playMarkerTableName), &errmsg);
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (dbpath, MediaPlaylist::getDeleteAllSql (MediaControl::playlistTableName), &errmsg);
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (dbpath, MediaItem::getDeleteAllSql (MediaControl::filescanTableName), &errmsg);
+	}
+	if (! dbpath.empty ()) {
+		Database::instance->close (dbpath);
+	}
+	if (result != OpResult::Success) {
+		task->setResult (false, UiText::instance->getText (UiTextId::ConfigurationError).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), errmsg.c_str ());
+		return;
+	}
+	removeMediaItemDirectories (basepath);
+
+	filescanOptions.scanPath.assign (task->options.scanPath);
+	filescanOptions.mediaThumbnailCount = task->options.mediaThumbnailCount;
+
+	prefs = App::instance->lockPrefs ();
+	prefs->insert (PrefsKey::mediaFilescanPath, filescanOptions.scanPath);
+	prefs->insert (PrefsKey::mediaThumbnailCount, filescanOptions.mediaThumbnailCount, MediaControl::defaultMediaThumbnailCount);
+	App::instance->unlockPrefs ();
+
+	isFilescanConfigured = true;
+	App::instance->showNotification (UiText::instance->getText (UiTextId::MediaFilescanConfiguredText));
+	filescan ();
+	task->setResult (true, UiText::instance->getText (UiTextId::ConfigurationUpdated).capitalized ());
+}
+
+void MediaControl::executeReady (MediaControlReadyTask *task) {
+	OpResult result;
+	StdString errmsg;
+	int mediacount;
+	StdString dbpath;
+
+	isReady = false;
+	mediacount = 0;
+	SDL_LockMutex (databasePathMutex);
+	dbpath.assign (databasePath);
+	databasePath.assign ("");
+	SDL_UnlockMutex (databasePathMutex);
+	if (! dbpath.empty ()) {
+		Database::instance->close (dbpath);
+		dbpath.assign ("");
+	}
+
+	if (mainOptions.savePlayHistory || mainOptions.savePlaylists || mainOptions.mediaScan) {
+		if (mainOptions.dataPath.empty () || (! OsUtil::directoryExists (mainOptions.dataPath))) {
+			mainOptions.savePlayHistory = false;
+			mainOptions.savePlaylists = false;
+			mainOptions.mediaScan = false;
+		}
+	}
+	if (!(mainOptions.savePlayHistory || mainOptions.savePlaylists || mainOptions.mediaScan)) {
+		CaptureWriter::instance->setBaseWritePath (StdString ());
+		UiLog::instance->removeListener (this);
+	}
+	else {
+		dbpath = OsUtil::getJoinedPath (mainOptions.dataPath, databaseName);
+		result = executeReady_openDatabase (dbpath);
+		if (result != OpResult::Success) {
+			task->setResult (false, UiText::instance->getText (UiTextId::MediaControlReadyErrorText), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString (), StdString::createSprintf ("Failed to open media database; databasePath=\"%s\" err=%i", dbpath.c_str (), result).c_str ());
+			return;
+		}
+		CaptureWriter::instance->setBaseWritePath (mainOptions.dataPath);
+
+		mediacount = MediaItem::countDatabaseRecords (dbpath, MediaControl::filescanTableName, &errmsg);
+		if (mediacount < 0) {
+			mediacount = 0;
+			Log::debug ("Failed to load media data; err=%s", errmsg.c_str ());
+		}
+
+		if (! UiLog::instance->loadMessages (dbpath, MediaControl::uiLogTableName, &errmsg)) {
+			Log::debug ("Failed to load media data; err=%s", errmsg.c_str ());
+		}
+		else {
+			UiLog::instance->addListener (this, MediaControl::uiLogMessageReceived);
+		}
+
+		appNews.readRecord (dbpath, MediaControl::appNewsTableName);
+
+		SDL_LockMutex (databasePathMutex);
+		databasePath.assign (dbpath);
+		SDL_UnlockMutex (databasePathMutex);
+
+		if (mainOptions.savePlayHistory) {
+			executeReady_loadPlayHistory ();
+		}
+	}
+
+	isReady = true;
 	lockStatus ();
-	status.mediaCount = 0;
+	status.statusText.assign (UiText::instance->getText (UiTextId::Ready).capitalized ());
+	status.mediaCount = mediacount;
 	unlockStatus ();
-	scan ();
-	endTask (MediaControl::ConfigureTask, UiText::instance->getText (UiTextId::ConfigurationUpdated).capitalized ());
+	task->setResult (true, UiText::instance->getText (UiTextId::Ready).capitalized ());
 }
+OpResult MediaControl::executeReady_openDatabase (const StdString &readyDatabasePath) {
+	OpResult result;
+	int version;
 
-void MediaControl::scan () {
-	runTask (MediaControl::ScanTask);
+	if (readyDatabasePath.empty ()) {
+		return (OpResult::InvalidConfigurationError);
+	}
+	result = Database::instance->open (readyDatabasePath);
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, MediaItem::getCreateTableSql (MediaControl::filescanTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, MediaItem::getCreateTableSql (MediaControl::historyTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, PlayMarker::getCreateTableSql (MediaControl::playMarkerTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, MediaPlaylist::getCreateTableSql (MediaControl::playlistTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, UiLog::getCreateTableSql (MediaControl::uiLogTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->exec (readyDatabasePath, AppNews::getCreateTableSql (MediaControl::appNewsTableName));
+	}
+	if (result == OpResult::Success) {
+		result = Database::instance->createMetadataTable (readyDatabasePath, StdString (MediaControl::metadataTableName));
+	}
+	if (result == OpResult::Success) {
+		version = Database::instance->readMetadataVersion (readyDatabasePath, StdString (MediaControl::metadataTableName));
+		if (version < metadataVersion) {
+			Database::instance->writeMetadataVersion (readyDatabasePath, StdString (MediaControl::metadataTableName), metadataVersion);
+		}
+	}
+	return (result);
 }
-void MediaControl::scanMediaFiles (void *itPtr) {
+void MediaControl::executeReady_loadPlayHistory () {
+	StdString errmsg;
+	OpResult result;
+
+	SDL_LockMutex (playHistoryMutex);
+	playHistoryLoadIds.assign (playHistoryRecordIds);
+	playHistoryRecordIds.clear ();
+	playHistoryMediaPathMap.clear ();
+	playHistorySize = 0;
+	SDL_UnlockMutex (playHistoryMutex);
+	RecordStore::instance->remove (playHistoryLoadIds);
+	executeRemoveRecordCallbacks (playHistoryLoadIds);
+	playHistoryLoadIds.clear ();
+
+	result = Database::instance->exec (databasePath, MediaItem::getSelectAllSql (MediaControl::historyTableName), &errmsg, MediaControl::executeReady_loadPlayHistory_row, this);
+	if (result != OpResult::Success) {
+		Log::debug ("Failed to load media data; err=%s", errmsg.c_str ());
+		return;
+	}
+	executeAddRecordCallbacks (playHistoryLoadIds);
+	playHistoryLoadIds.clear ();
+}
+int MediaControl::executeReady_loadPlayHistory_row (void *itPtr, int columnCount, char **columnValues, char **columnNames) {
 	MediaControl *it = (MediaControl *) itPtr;
+	MediaItem m;
+	Json *record;
 
-	it->executeScanMediaFiles ();
+	if (! m.copyDatabaseRowValues (columnCount, columnValues, columnNames)) {
+		return (-1);
+	}
+	record = m.createRecord (it->agentId);
+	RecordStore::instance->insert (record, true);
+	delete (record);
+
+	it->playHistoryLoadIds.push_back (m.id);
+	SDL_LockMutex (it->playHistoryMutex);
+	it->playHistoryRecordIds.push_back (m.id);
+	it->playHistoryMediaPathMap.insert (m.mediaPath, m.id);
+	++(it->playHistorySize);
+	SDL_UnlockMutex (it->playHistoryMutex);
+	return (0);
 }
-void MediaControl::executeScanMediaFiles () {
+
+void MediaControl::filescan () {
+	addTask (new MediaControlFilescanTask ());
+}
+void MediaControl::executeFilescan (MediaControlFilescanTask *task) {
 	StringList findfiles;
 	StringList::const_iterator i1, i2;
 	std::list<MediaItem> scanitems;
@@ -643,32 +769,36 @@ void MediaControl::executeScanMediaFiles () {
 	int filecount, scancount, recordcount, addcount, errorcount;
 	bool found;
 
-	UiLog::instance->write (0, "%s", UiText::instance->getText (UiTextId::BeginMediaScan).capitalized ().c_str ());
-	recordcount = MediaItem::countDatabaseRecords (databasePath, &errmsg);
+	if ((! isReady) || databasePath.empty ()) {
+		task->setResult (false, UiText::instance->getText (UiTextId::MediaScanFailed).capitalized (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::MediaScanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ().c_str ()), errmsg.c_str ());
+		return;
+	}
+	UiLog::write (UiLog::NoOptions, "%s", UiText::instance->getText (UiTextId::BeginMediaScan).capitalized ().c_str ());
+	recordcount = MediaItem::countDatabaseRecords (databasePath, MediaControl::filescanTableName, &errmsg);
 	if (recordcount < 0) {
-		endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::MediaScanFailed).capitalized (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::MediaScanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ().c_str ()), errmsg.c_str ());
+		task->setResult (false, UiText::instance->getText (UiTextId::MediaScanFailed).capitalized (), UiText::instance->getText (UiTextId::MediaControlReadDataErrorText), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::MediaScanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::MediaControlReadDataErrorText).c_str ()), errmsg.c_str ());
 		return;
 	}
 	lockStatus ();
 	status.taskText2.assign (UiText::instance->getText (UiTextId::ReadingMediaDirectory).capitalized ());
 	unlockStatus ();
 
-	i1 = mediaSourcePath.cbegin ();
-	i2 = mediaSourcePath.cend ();
+	i1 = filescanOptions.scanPath.cbegin ();
+	i2 = filescanOptions.scanPath.cend ();
 	while (i1 != i2) {
 		if (isTaskCancelled) {
-			endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
+			task->setResult (true, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
 			return;
 		}
-		executeScanMediaFiles_readDirectory (*i1, &findfiles);
+		executeFilescan_readDirectory (*i1, &findfiles);
 		++i1;
 	}
 	if (isTaskCancelled) {
-		endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
+		task->setResult (true, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
 		return;
 	}
 	if (findfiles.empty ()) {
-		endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanComplete).capitalized (), StdString::createSprintf ("0 %s", UiText::instance->getText (UiTextId::NewFilesFound).c_str ()), StdString::createSprintf ("%s: 0 %s", UiText::instance->getText (UiTextId::EndMediaScan).capitalized ().c_str (), UiText::instance->getText (UiTextId::NewFilesFound).c_str ()));
+		task->setResult (true, UiText::instance->getText (UiTextId::ScanComplete).capitalized (), StdString::createSprintf ("0 %s", UiText::instance->getText (UiTextId::NewFilesFound).c_str ()), StdString::createSprintf ("%s: 0 %s", UiText::instance->getText (UiTextId::EndMediaScan).capitalized ().c_str (), UiText::instance->getText (UiTextId::NewFilesFound).c_str ()));
 		return;
 	}
 	findfiles.sort ();
@@ -677,7 +807,7 @@ void MediaControl::executeScanMediaFiles () {
 	i2 = findfiles.cend ();
 	while (i1 != i2) {
 		if (isTaskCancelled) {
-			endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
+			task->setResult (true, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
 			return;
 		}
 		path = *i1;
@@ -687,19 +817,15 @@ void MediaControl::executeScanMediaFiles () {
 		if (mtime < 0) {
 			++errorcount;
 			Log::debug ("Failed to read media file; path=\"%s\" err=\"Error reading file mtime\"", path.c_str ());
-			UiLog::instance->write (0, "%s: %s, \"%s\" in directory \"%s\"", UiText::instance->getText (UiTextId::ScanError).capitalized ().c_str (), UiText::instance->getText (UiTextId::FileOpenFailed).capitalized ().c_str (), OsUtil::getPathBasename (path).c_str (), OsUtil::getPathDirname (path).c_str ());
+			UiLog::write (UiLog::NoOptions, "%s: %s, \"%s\" in directory \"%s\"", UiText::instance->getText (UiTextId::ScanError).capitalized ().c_str (), UiText::instance->getText (UiTextId::FileOpenFailed).capitalized ().c_str (), OsUtil::getPathBasename (path).c_str (), OsUtil::getPathDirname (path).c_str ());
 			continue;
 		}
-		found = item.readDatabaseMediaPathRow (databasePath, &errmsg, path);
-		if (! errmsg.empty ()) {
-			Log::debug ("Failed to read database record; err=\"%s\"", errmsg.c_str ());
-			continue;
-		}
+		found = item.readDatabaseMediaPathRow (databasePath, MediaControl::filescanTableName, NULL, path);
 		if (found) {
 			if (item.mtime == mtime) {
 				continue;
 			}
-			item.clear (item.mediaId);
+			item.clear (item.id);
 		}
 		else {
 			item.clear (RecordStore::instance->getRecordId (SystemInterface::CommandId_MediaItem));
@@ -718,7 +844,7 @@ void MediaControl::executeScanMediaFiles () {
 	j2 = scanitems.end ();
 	while (j1 != j2) {
 		if (isTaskCancelled) {
-			endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
+			task->setResult (true, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
 			return;
 		}
 		++scancount;
@@ -728,9 +854,9 @@ void MediaControl::executeScanMediaFiles () {
 		status.taskText2.append (OsUtil::getPathBasename (j1->mediaPath));
 		unlockStatus ();
 
-		result = executeScanMediaFiles_processFile (j1, &errmsg);
+		result = executeFilescan_processFile (j1, &errmsg);
 		if (isTaskCancelled) {
-			endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
+			task->setResult (true, UiText::instance->getText (UiTextId::ScanCancelled).capitalized (), StdString (), UiText::instance->getText (UiTextId::MediaScanCancelled).capitalized ());
 			return;
 		}
 		if (result != OpResult::Success) {
@@ -746,7 +872,7 @@ void MediaControl::executeScanMediaFiles () {
 			else {
 				errtype = UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ();
 			}
-			UiLog::instance->write (0, "%s: %s, \"%s\" in directory \"%s\"", UiText::instance->getText (UiTextId::ScanError).capitalized ().c_str (), errtype.c_str (), OsUtil::getPathBasename (j1->mediaPath).c_str (), OsUtil::getPathDirname (j1->mediaPath).c_str ());
+			UiLog::write (UiLog::NoOptions, "%s: %s, \"%s\" in directory \"%s\"", UiText::instance->getText (UiTextId::ScanError).capitalized ().c_str (), errtype.c_str (), OsUtil::getPathBasename (j1->mediaPath).c_str (), OsUtil::getPathDirname (j1->mediaPath).c_str ());
 		}
 		else {
 			++addcount;
@@ -758,17 +884,17 @@ void MediaControl::executeScanMediaFiles () {
 		++j1;
 	}
 
-	recordcount = MediaItem::countDatabaseRecords (databasePath, &errmsg);
+	recordcount = MediaItem::countDatabaseRecords (databasePath, MediaControl::filescanTableName, &errmsg);
 	if (recordcount < 0) {
-		endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::MediaScanFailed).capitalized (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::MediaScanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ().c_str ()), errmsg.c_str ());
+		task->setResult (false, UiText::instance->getText (UiTextId::MediaScanFailed).capitalized (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::MediaScanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::MediaControlWriteDataErrorText).c_str ()), errmsg.c_str ());
 		return;
 	}
 	lockStatus ();
 	status.mediaCount = recordcount;
 	unlockStatus ();
-	endTask (MediaControl::ScanTask, UiText::instance->getText (UiTextId::ScanComplete).capitalized (), UiText::instance->getCountText (addcount, UiTextId::NewFileFound, UiTextId::NewFilesFound), StdString::createSprintf ("%s: %s, %s", UiText::instance->getText (UiTextId::EndMediaScan).capitalized ().c_str (), UiText::instance->getCountText (addcount, UiTextId::NewFileFound, UiTextId::NewFilesFound).c_str (), UiText::instance->getCountText (errorcount, UiTextId::ScanError, UiTextId::ScanErrors).c_str ()));
+	task->setResult (true, UiText::instance->getText (UiTextId::ScanComplete).capitalized (), UiText::instance->getCountText (addcount, UiTextId::NewFileFound, UiTextId::NewFilesFound), StdString::createSprintf ("%s: %s, %s", UiText::instance->getText (UiTextId::EndMediaScan).capitalized ().c_str (), UiText::instance->getCountText (addcount, UiTextId::NewFileFound, UiTextId::NewFilesFound).c_str (), UiText::instance->getCountText (errorcount, UiTextId::ScanError, UiTextId::ScanErrors).c_str ()));
 }
-void MediaControl::executeScanMediaFiles_readDirectory (const StdString &scanPath, StringList *destList) {
+void MediaControl::executeFilescan_readDirectory (const StdString &scanPath, StringList *destList) {
 	OpResult result;
 	StringList files;
 	StringList::const_iterator i1, i2;
@@ -796,7 +922,7 @@ void MediaControl::executeScanMediaFiles_readDirectory (const StdString &scanPat
 		path = OsUtil::getJoinedPath (scanPath, path);
 		filetype = OsUtil::getFileType (path);
 		if (filetype == OsUtil::DirectoryFile) {
-			executeScanMediaFiles_readDirectory (path, destList);
+			executeFilescan_readDirectory (path, destList);
 		}
 		else if (filetype == OsUtil::RegularFile) {
 			if (MediaUtil::isMediaFileExtension (OsUtil::getPathExtension (path))) {
@@ -805,7 +931,7 @@ void MediaControl::executeScanMediaFiles_readDirectory (const StdString &scanPat
 		}
 	}
 }
-OpResult MediaControl::executeScanMediaFiles_processFile (std::list<MediaItem>::iterator item, StdString *errorMessage) {
+OpResult MediaControl::executeFilescan_processFile (std::list<MediaItem>::iterator item, StdString *errorMessage) {
 	MediaReader reader;
 	StdString sql;
 	OpResult result;
@@ -820,8 +946,8 @@ OpResult MediaControl::executeScanMediaFiles_processFile (std::list<MediaItem>::
 		errorMessage->assign ("Invalid media duration");
 		return (OpResult::MalformedDataError);
 	}
-	if (mediaThumbnailCount >= 0) {
-		result = executeScanMediaFiles_writeThumbnailImages (item, errorMessage, reader);
+	if (filescanOptions.mediaThumbnailCount >= 0) {
+		result = executeFilescan_writeThumbnailImages (item, errorMessage, reader);
 		if (result != OpResult::Success) {
 			return (result);
 		}
@@ -840,7 +966,7 @@ OpResult MediaControl::executeScanMediaFiles_processFile (std::list<MediaItem>::
 	if (isTaskCancelled) {
 		return (OpResult::Success);
 	}
-	sql = item->getUpsertSql ();
+	sql = item->getUpsertSql (MediaControl::filescanTableName);
 	if (sql.empty ()) {
 		errorMessage->assign ("Invalid media metadata");
 		return (OpResult::MalformedDataError);
@@ -852,7 +978,7 @@ OpResult MediaControl::executeScanMediaFiles_processFile (std::list<MediaItem>::
 	errorMessage->assign ("");
 	return (OpResult::Success);
 }
-OpResult MediaControl::executeScanMediaFiles_writeThumbnailImages (std::list<MediaItem>::iterator item, StdString *errorMessage, const MediaReader &metadataReader) {
+OpResult MediaControl::executeFilescan_writeThumbnailImages (std::list<MediaItem>::iterator item, StdString *errorMessage, const MediaReader &metadataReader) {
 	StdString dirpath;
 	MediaReader reader;
 	OpResult result;
@@ -860,7 +986,7 @@ OpResult MediaControl::executeScanMediaFiles_writeThumbnailImages (std::list<Med
 	int64_t lasttimestamp, seektimestamp, seektimestampdelta;
 	int imagecount, maximagecount;
 
-	if (mediaThumbnailCount < 0) {
+	if (filescanOptions.mediaThumbnailCount < 0) {
 		return (OpResult::Success);
 	}
 	if (!(metadataReader.isVideo || metadataReader.hasAudioAlbumArt)) {
@@ -870,7 +996,7 @@ OpResult MediaControl::executeScanMediaFiles_writeThumbnailImages (std::list<Med
 		errorMessage->assign ("Invalid media duration");
 		return (OpResult::MalformedDataError);
 	}
-	dirpath = OsUtil::getJoinedPath (dataPath, item->mediaId);
+	dirpath = OsUtil::getJoinedPath (mainOptions.dataPath, item->id);
 	result = OsUtil::createDirectory (dirpath);
 	if (result != OpResult::Success) {
 		errorMessage->assign ("Failed to create data directory");
@@ -892,7 +1018,7 @@ OpResult MediaControl::executeScanMediaFiles_writeThumbnailImages (std::list<Med
 		maximagecount = 1;
 	}
 	else {
-		switch (mediaThumbnailCount) {
+		switch (filescanOptions.mediaThumbnailCount) {
 			case MediaThumbnailEveryHour: {
 				seektimestampdelta = 3600 * 1000;
 				progressdelta = writeThumbnailImagesProgressPercent * (double) seektimestampdelta / (double) metadataReader.duration;
@@ -977,34 +1103,33 @@ OpResult MediaControl::executeScanMediaFiles_writeThumbnailImages (std::list<Med
 	return (OpResult::Success);
 }
 
-void MediaControl::clean () {
-	runTask (MediaControl::CleanTask);
+void MediaControl::cleanFilescan () {
+	addTask (new MediaControlCleanFilescanTask ());
 }
-void MediaControl::cleanMediaData (void *itPtr) {
-	MediaControl *it = (MediaControl *) itPtr;
-
-	it->executeCleanMediaData ();
-}
-void MediaControl::executeCleanMediaData () {
+void MediaControl::executeCleanFilescan (MediaControlCleanFilescanTask *task) {
 	OpResult result;
 	StdString errmsg;
 	int recordcount;
 	int64_t filesize;
 
-	UiLog::instance->write (0, "%s", UiText::instance->getText (UiTextId::BeginMediaDataClean).capitalized ().c_str ());
-	result = executeCleanMediaData_removeRecords (&recordcount, &errmsg);
-	if (result != OpResult::Success) {
-		endTask (MediaControl::CleanTask, UiText::instance->getText (UiTextId::CleanFailed).capitalized (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::CleanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ().c_str ()), errmsg.c_str ());
+	if ((! isReady) || databasePath.empty ()) {
+		task->setResult (true, UiText::instance->getText (UiTextId::CleanComplete).capitalized ());
 		return;
 	}
-	result = executeCleanMediaData_removeFiles (&filesize, &errmsg);
+	UiLog::write (UiLog::NoOptions, "%s", UiText::instance->getText (UiTextId::BeginMediaDataClean).capitalized ().c_str ());
+	result = executeCleanFilescan_removeRecords (&recordcount, &errmsg);
 	if (result != OpResult::Success) {
-		endTask (MediaControl::CleanTask, UiText::instance->getText (UiTextId::CleanFailed).capitalized (), UiText::instance->getText (UiTextId::FileOperationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::CleanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::FileOperationError).capitalized ().c_str ()), errmsg.c_str ());
+		task->setResult (false, UiText::instance->getText (UiTextId::CleanFailed).capitalized (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::CleanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::InternalApplicationError).capitalized ().c_str ()), errmsg.c_str ());
 		return;
 	}
-	endTask (MediaControl::CleanTask, UiText::instance->getText (UiTextId::CleanComplete).capitalized (), UiText::instance->getCountText (recordcount, UiTextId::MediaRecordRemoved, UiTextId::MediaRecordsRemoved), StdString::createSprintf ("%s: %s, %s %s", UiText::instance->getText (UiTextId::EndMediaDataClean).capitalized ().c_str (), UiText::instance->getCountText (recordcount, UiTextId::MediaRecordRemoved, UiTextId::MediaRecordsRemoved).c_str (), UiText::instance->getByteCountText (filesize).c_str (), UiText::instance->getText (UiTextId::Freed).c_str ()));
+	result = executeCleanFilescan_removeFiles (&filesize, &errmsg);
+	if (result != OpResult::Success) {
+		task->setResult (false, UiText::instance->getText (UiTextId::CleanFailed).capitalized (), UiText::instance->getText (UiTextId::FileOperationError).capitalized (), StdString::createSprintf ("%s: %s", UiText::instance->getText (UiTextId::CleanFailed).capitalized ().c_str (), UiText::instance->getText (UiTextId::FileOperationError).capitalized ().c_str ()), errmsg.c_str ());
+		return;
+	}
+	task->setResult (true, UiText::instance->getText (UiTextId::CleanComplete).capitalized (), UiText::instance->getCountText (recordcount, UiTextId::MediaRecordRemoved, UiTextId::MediaRecordsRemoved), StdString::createSprintf ("%s: %s, %s %s", UiText::instance->getText (UiTextId::EndMediaDataClean).capitalized ().c_str (), UiText::instance->getCountText (recordcount, UiTextId::MediaRecordRemoved, UiTextId::MediaRecordsRemoved).c_str (), UiText::instance->getByteCountText (filesize).c_str (), UiText::instance->getText (UiTextId::Freed).c_str ()));
 }
-OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCount, StdString *errorMessage) {
+OpResult MediaControl::executeCleanFilescan_removeRecords (int *removedRecordCount, StdString *errorMessage) {
 	constexpr const int pageSize = 64;
 	std::list<MediaItem> items;
 	std::list<MediaItem>::const_iterator i1, i2;
@@ -1017,7 +1142,7 @@ OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCo
 	offset = 0;
 	removecount = 0;
 	while (true) {
-		if (! MediaItem::readDatabaseRows (databasePath, errorMessage, &items, StdString (), offset, pageSize)) {
+		if (! MediaItem::readDatabaseRows (databasePath, MediaControl::filescanTableName, errorMessage, &items, StdString (), offset, pageSize)) {
 			return (OpResult::SqliteOperationFailedError);
 		}
 		if (items.empty ()) {
@@ -1027,7 +1152,7 @@ OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCo
 		i2 = items.cend ();
 		while (i1 != i2) {
 			if (! OsUtil::fileExists (i1->mediaPath)) {
-				removeids.push_back (i1->mediaId);
+				removeids.push_back (i1->id);
 			}
 			++i1;
 		}
@@ -1037,7 +1162,7 @@ OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCo
 	j1 = removeids.cbegin ();
 	j2 = removeids.cend ();
 	while (j1 != j2) {
-		sql = MediaItem::getDeleteSql (*j1);
+		sql = MediaItem::getDeleteSql (MediaControl::filescanTableName, *j1);
 		result = Database::instance->exec (databasePath, sql, errorMessage);
 		if (result != OpResult::Success) {
 			return (result);
@@ -1046,7 +1171,7 @@ OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCo
 		++j1;
 	}
 
-	recordcount = MediaItem::countDatabaseRecords (databasePath, errorMessage);
+	recordcount = MediaItem::countDatabaseRecords (databasePath, MediaControl::filescanTableName, errorMessage);
 	if (recordcount < 0) {
 		return (OpResult::SqliteOperationFailedError);
 	}
@@ -1058,7 +1183,7 @@ OpResult MediaControl::executeCleanMediaData_removeRecords (int *removedRecordCo
 	}
 	return (OpResult::Success);
 }
-OpResult MediaControl::executeCleanMediaData_removeFiles (int64_t *removedFileSize, StdString *errorMessage) {
+OpResult MediaControl::executeCleanFilescan_removeFiles (int64_t *removedFileSize, StdString *errorMessage) {
 	OpResult result;
 	StringList files;
 	StringList::const_iterator i1, i2;
@@ -1066,7 +1191,7 @@ OpResult MediaControl::executeCleanMediaData_removeFiles (int64_t *removedFileSi
 	StdString id, path;
 	int64_t removesize, filesize;
 
-	result = OsUtil::readDirectory (dataPath, &files);
+	result = OsUtil::readDirectory (mainOptions.dataPath, &files);
 	if (result != OpResult::Success) {
 		errorMessage->assign ("Failed to read data directory");
 		return (result);
@@ -1080,15 +1205,12 @@ OpResult MediaControl::executeCleanMediaData_removeFiles (int64_t *removedFileSi
 		if ((! id.isUuid ()) || (RecordStore::instance->getRecordIdCommand (id) != SystemInterface::CommandId_MediaItem)) {
 			continue;
 		}
-		path = OsUtil::getJoinedPath (dataPath, id);
+		path = OsUtil::getJoinedPath (mainOptions.dataPath, id);
 		if (OsUtil::getFileType (path) != OsUtil::DirectoryFile) {
 			continue;
 		}
-		if (item.readDatabaseMediaIdRow (databasePath, errorMessage, id)) {
+		if (item.readDatabaseMediaIdRow (databasePath, MediaControl::filescanTableName, errorMessage, id)) {
 			continue;
-		}
-		if (! errorMessage->empty ()) {
-			return (OpResult::SqliteOperationFailedError);
 		}
 		filesize = OsUtil::getDirectorySize (path);
 		if (filesize > 0) {
@@ -1104,4 +1226,228 @@ OpResult MediaControl::executeCleanMediaData_removeFiles (int64_t *removedFileSi
 		*removedFileSize = removesize;
 	}
 	return (OpResult::Success);
+}
+
+void MediaControl::executeDatabaseExec (void *taskPtr) {
+	MediaControlDatabaseExecTask *task = (MediaControlDatabaseExecTask *) taskPtr;
+	StdString dbpath, errmsg;
+	OpResult result;
+
+	if (MediaControl::instance->openDatabase (&dbpath) == OpResult::Success) {
+		if (task->databasePath.equals (dbpath)) {
+			result = Database::instance->execTransaction (dbpath, task->sql, &errmsg);
+			if (result != OpResult::Success) {
+				Log::debug ("Failed to write media data; err=%i,%s", result, errmsg.c_str ());
+			}
+		}
+		Database::instance->close (dbpath);
+	}
+	task->release ();
+}
+
+void MediaControl::removeMediaItemDirectories (const StdString &targetPath) {
+	StringList files;
+	StringList::const_iterator i1, i2;
+	StdString path;
+	OpResult result;
+
+	if (targetPath.empty ()) {
+		return;
+	}
+	result = OsUtil::readDirectory (targetPath, &files);
+	if (result != OpResult::Success) {
+		return;
+	}
+	i1 = files.cbegin ();
+	i2 = files.cend ();
+	while (i1 != i2) {
+		path = *i1;
+		++i1;
+		if (path.isUuid () && (RecordStore::instance->getRecordIdCommand (path) == SystemInterface::CommandId_MediaItem)) {
+			path = OsUtil::getJoinedPath (targetPath, path);
+			result = OsUtil::removeDirectory (path, true);
+			if (result != OpResult::Success) {
+				Log::debug ("Failed to remove data directory; path=\"%s\" err=%i", path.c_str (), result);
+			}
+		}
+	}
+}
+
+void MediaControl::addPlayHistoryListener (void *callbackData, MediaControl::PlayHistoryCallback addRecordCallback, MediaControl::PlayHistoryCallback removeRecordCallback) {
+	std::list<MediaControl::PlayHistoryCallbackContext>::iterator i1, i2;
+	bool found;
+
+	SDL_LockMutex (playHistoryCallbackMutex);
+	found = false;
+	i1 = playHistoryCallbackList.begin ();
+	i2 = playHistoryCallbackList.end ();
+	while (i1 != i2) {
+		if (i1->callbackData == callbackData) {
+			found = true;
+			i1->addRecordCallback = addRecordCallback;
+			i1->removeRecordCallback = removeRecordCallback;
+			break;
+		}
+		++i1;
+	}
+	if (! found) {
+		playHistoryCallbackList.push_back (MediaControl::PlayHistoryCallbackContext (callbackData, addRecordCallback, removeRecordCallback));
+	}
+	SDL_UnlockMutex (playHistoryCallbackMutex);
+}
+
+void MediaControl::addPlayHistoryRecord (const MediaItem &mediaItem) {
+	MediaItem m;
+	StdString createid, removeid;
+	Json *record;
+	StringList sql;
+	std::list<MediaControl::PlayHistoryCallbackContext>::const_iterator i1, i2;
+
+	if (isStopped) {
+		return;
+	}
+	m.copyValues (mediaItem);
+	m.id = RecordStore::instance->getRecordId (SystemInterface::CommandId_MediaItem);
+	m.thumbnailTimestamps.clear ();
+	m.tags.clear ();
+	m.mtime = OsUtil::getTime ();
+	createid = m.id;
+	record = m.createRecord (agentId);
+	RecordStore::instance->insert (record, true);
+	delete (record);
+
+	SDL_LockMutex (playHistoryMutex);
+	playHistoryRecordIds.push_back (createid);
+	removeid = playHistoryMediaPathMap.find (m.mediaPath, "");
+	if (removeid.empty ()) {
+		++playHistorySize;
+	}
+	else {
+		playHistoryRecordIds.remove (removeid);
+	}
+	playHistoryMediaPathMap.insert (m.mediaPath, createid);
+	SDL_UnlockMutex (playHistoryMutex);
+
+	if (! removeid.empty ()) {
+		RecordStore::instance->remove (removeid);
+	}
+	if (mainOptions.savePlayHistory) {
+		if (! removeid.empty ()) {
+			sql.push_back (MediaItem::getDeleteSql (MediaControl::historyTableName, removeid));
+		}
+		sql.push_back (m.getUpsertSql (MediaControl::historyTableName));
+		execDatabase (sql);
+	}
+
+	SDL_LockMutex (playHistoryCallbackMutex);
+	i1 = playHistoryCallbackList.cbegin ();
+	i2 = playHistoryCallbackList.cend ();
+	while (i1 != i2) {
+		i1->addRecordCallback (i1->callbackData, createid);
+		if (! removeid.empty ()) {
+			i1->removeRecordCallback (i1->callbackData, removeid);
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (playHistoryCallbackMutex);
+}
+
+void MediaControl::executeAddRecordCallbacks (const StringList &idList) {
+	std::list<MediaControl::PlayHistoryCallbackContext>::const_iterator i1, i2;
+	StringList::const_iterator j1, j2;
+
+	SDL_LockMutex (playHistoryCallbackMutex);
+	i1 = playHistoryCallbackList.cbegin ();
+	i2 = playHistoryCallbackList.cend ();
+	while (i1 != i2) {
+		j1 = idList.cbegin ();
+		j2 = idList.cend ();
+		while (j1 != j2) {
+			i1->addRecordCallback (i1->callbackData, *j1);
+			++j1;
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (playHistoryCallbackMutex);
+}
+
+void MediaControl::executeRemoveRecordCallbacks (const StringList &idList) {
+	std::list<MediaControl::PlayHistoryCallbackContext>::const_iterator i1, i2;
+	StringList::const_iterator j1, j2;
+
+	SDL_LockMutex (playHistoryCallbackMutex);
+	i1 = playHistoryCallbackList.cbegin ();
+	i2 = playHistoryCallbackList.cend ();
+	while (i1 != i2) {
+		j1 = idList.cbegin ();
+		j2 = idList.cend ();
+		while (j1 != j2) {
+			i1->removeRecordCallback (i1->callbackData, *j1);
+			++j1;
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (playHistoryCallbackMutex);
+}
+
+int MediaControl::getPlayHistorySize () {
+	int count;
+
+	SDL_LockMutex (playHistoryMutex);
+	count = playHistorySize;
+	SDL_UnlockMutex (playHistoryMutex);
+	return (count);
+}
+
+void MediaControl::getPlayHistoryRecordIds (StringList *destList) {
+	destList->clear ();
+	SDL_LockMutex (playHistoryMutex);
+	destList->assign (playHistoryRecordIds);
+	SDL_UnlockMutex (playHistoryMutex);
+}
+
+void MediaControl::clearPlayHistory () {
+	StringList ids;
+
+	SDL_LockMutex (playHistoryMutex);
+	ids.assign (playHistoryRecordIds);
+	playHistoryRecordIds.clear ();
+	playHistoryMediaPathMap.clear ();
+	playHistorySize = 0;
+	SDL_UnlockMutex (playHistoryMutex);
+	RecordStore::instance->remove (ids);
+	execDatabase (StringList (MediaItem::getDeleteAllSql (MediaControl::historyTableName)));
+	executeRemoveRecordCallbacks (ids);
+}
+
+void MediaControl::uiLogMessageReceived (void *itPtr, const UiLog::Message &message) {
+	MediaControl *it = (MediaControl *) itPtr;
+	StringList sql;
+	StdString dbpath, errmsg;
+
+	UiLog::getInsertMessageSql (message, MediaControl::uiLogTableName, &sql);
+	SDL_LockMutex (it->databasePathMutex);
+	dbpath.assign (it->databasePath);
+	SDL_UnlockMutex (it->databasePathMutex);
+	if (dbpath.empty ()) {
+		return;
+	}
+	if (Database::instance->execTransaction (dbpath, sql, &errmsg) != OpResult::Success) {
+		Log::debug ("Failed to write application data; err=\"%s\"", errmsg.c_str ());
+	}
+}
+
+void MediaControl::clearUiLog () {
+	StdString dbpath, errmsg;
+
+	UiLog::instance->clear ();
+	SDL_LockMutex (databasePathMutex);
+	dbpath.assign (databasePath);
+	SDL_UnlockMutex (databasePathMutex);
+	if (dbpath.empty ()) {
+		return;
+	}
+	if (Database::instance->exec (dbpath, StdString::createSprintf ("DELETE FROM %s;", MediaControl::uiLogTableName), &errmsg) != OpResult::Success) {
+		Log::debug ("Failed to write application data; err=\"%s\"", errmsg.c_str ());
+	}
 }

@@ -66,8 +66,11 @@ public:
 	// Return the number of players in the paused state
 	int getPausedPlayerCount ();
 
-	// Start playback of a media item
-	void playMedia (const StdString &mediaId, int64_t seekTimestamp = 0, bool isDetached = false);
+	// Start playback of a media path target
+	void playMediaPath (const StdString &playPath, int64_t seekTimestamp = 0, bool isDetached = false);
+
+	// Start playback of a MediaItem record
+	void playMediaItem (const StdString &mediaId, int64_t seekTimestamp = 0, bool isDetached = false);
 
 	// Start playback of a media playlist
 	void playPlaylist (MediaPlaylistWindow *playlist);

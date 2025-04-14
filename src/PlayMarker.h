@@ -41,19 +41,20 @@ public:
 	PlayMarker ();
 	~PlayMarker ();
 
-	static const StdString createTableSql;
-
 	StdString recordId;
 	Int64List markerTimestamps;
 
 	// Read fields from a database row and return true if the operation succeeded
-	bool readDatabaseRow (const StdString &databasePath, StdString *errorMessage);
+	bool readDatabaseRow (const StdString &databasePath, const char *tableName, StdString *errorMessage);
 	static int readDatabaseRow_row (void *itPtr, int columnCount, char **columnValues, char **columnNames);
 
 	// Return database upsert SQL generated from item fields
-	StdString getUpdateSql () const;
+	StdString getUpdateSql (const char *tableName) const;
+
+	// Return an SQL CREATE TABLE statement that creates a table of PlayMarker records
+	static StdString getCreateTableSql (const char *tableName);
 
 	// Return an SQL DELETE statement that clears all records
-	static StdString getDeleteAllSql ();
+	static StdString getDeleteAllSql (const char *tableName);
 };
 #endif

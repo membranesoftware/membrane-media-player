@@ -178,6 +178,7 @@ void Button::setDisabled (bool disabled, const StdString &tooltipTextValue) {
 	else {
 		isInputSuspended = false;
 	}
+	resetInputState ();
 	reflow ();
 }
 

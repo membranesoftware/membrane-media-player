@@ -34,7 +34,6 @@
 #ifndef MEDIA_PLAYLIST_VIEW_WINDOW_H
 #define MEDIA_PLAYLIST_VIEW_WINDOW_H
 
-#include "MediaItem.h"
 #include "Widget.h"
 #include "WidgetHandle.h"
 #include "Panel.h"
@@ -74,7 +73,6 @@ public:
 
 	// Superclass override methods
 	void reflow ();
-	void syncRecordStore ();
 
 protected:
 	// Superclass override methods
@@ -111,17 +109,15 @@ public:
 	void setListPosition (int position);
 
 	int listPosition;
-	bool isLoaded;
-	StdString mediaId;
-	MediaItem mediaItem;
 	StdString mediaName;
-	int64_t startTimestamp;
+	int64_t playSeekTimestamp;
 	int thumbnailWidth;
 	int thumbnailHeight;
 	WidgetHandle<MediaPlaylistViewWindowItemLabel> itemLabelHandle;
 	MediaPlaylistViewWindowItemLabel *itemLabel;
 	WidgetHandle<ImageWindow> thumbnailImageHandle;
 	ImageWindow *thumbnailImage;
+	bool isFrameThumbnail;
 };
 
 class MediaPlaylistViewWindowItemLabel : public Panel {
@@ -132,8 +128,8 @@ public:
 	// Set the label's window width value
 	void setWindowWidth (double widthValue);
 
-	// Set the label's start timestamp text
-	void setStartTimestamp (int64_t startTimestamp, int64_t streamDuration);
+	// Set the label's play seek timestamp text
+	void setPlaySeekTimestamp (int64_t playSeekTimestamp, int64_t streamDuration);
 
 	// Set the label's active state
 	void setActive (bool active);

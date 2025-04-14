@@ -36,8 +36,10 @@
 
 #include "ft2build.h"
 #include FT_FREETYPE_H
-#include "Buffer.h"
-#include "Font.h"
+#include "OsUtil.h"
+
+class Buffer;
+class Font;
 
 class Resource {
 public:
@@ -54,11 +56,13 @@ public:
 	// Read-only data members
 	StdString dataPath;
 	StdString lastErrorMessage;
+	bool isBundleFile;
+	bool isOpen;
 
 	// Set the source path that should be used for loading file assets. If the path ends in ".dat", it is opened as a bundle file; otherwise, the path is treated as a directory prefix for direct file access.
 	void setSource (const StdString &path);
 
-	// Prepare the Resource object to execute file operations. Returns a Result value.
+	// Prepare the Resource object to execute file operations and return a result value
 	OpResult open ();
 
 	// Close the resource object and free all assets
@@ -70,14 +74,20 @@ public:
 	// Return a boolean value indicating whether a resource file exists at the specified path
 	bool fileExists (const StdString &path);
 
-	// Open resource data at the specified path and return the resulting SDL_RWops object, or NULL if the file could not be opened. The caller is responsible for closing the SDL_RWops object when it's no longer needed. If fileSize is non-NULL, its value is set to the size of the opened file.
+	// Open resource data at the specified path and return the resulting SDL_RWops object, or NULL if the file could not be opened. The caller is responsible for closing the SDL_RWops object with SDL_RWclose when it's no longer needed. If fileSize is non-NULL, its value is set to the size of the opened file.
 	SDL_RWops *openFile (const StdString &path, uint64_t *fileSize = NULL);
+
+	// Read the resource file at the specified path, invoke the provided callback with text preceding each newline, and return a result value
+	OpResult readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength = 65536);
 
 	// Load file data from the specified resource path. Returns a pointer to the resulting Buffer object, or NULL if the file load failed. If a pointer is returned by this method, the referenced path must be unloaded with the unloadFile method when the Buffer is no longer needed.
 	Buffer *loadFile (const StdString &path);
 
 	// Unload previously acquired file resources from the specified path
 	void unloadFile (const StdString &path);
+
+	// Return the number of loaded file entries
+	int getFileCount ();
 
 	// Load an SDL_surface asset from an image file at the specified resource path. Returns a pointer to the resulting SDL_surface, or NULL if the surface could not be loaded. If an SDL_surface is returned by this method, the caller is responsible for freeing it with SDL_FreeSurface when it's no longer needed.
 	SDL_Surface *loadSurface (const StdString &path);
@@ -94,13 +104,19 @@ public:
 	// Unload previously acquired texture resources from the specified path
 	void unloadTexture (const StdString &path);
 
+	// Return the number of loaded texture entries
+	int getTextureCount ();
+
 	// Load a Font asset from a ttf file at the specified resource path. Returns a pointer to the resulting Font, or NULL if the font could not be loaded. This method must be invoked only from the application's main thread.
 	Font *loadFont (const StdString &path, int pointSize);
 
 	// Unload previously acquired font resources for the specified path and point size
 	void unloadFont (const StdString &path, int pointSize);
 
-	// Read a value from an SDL_RWops object and store it in the provided pointer. Returns a Result value.
+	// Return the number of loaded font entries
+	int getFontCount ();
+
+	// Read a value from an SDL_RWops object, store it in the provided pointer, and return a result value
 	static OpResult readUint64 (SDL_RWops *src, Uint64 *value);
 
 	// Interface functions for use in an SDL_RWops struct
@@ -129,25 +145,19 @@ private:
 	};
 
 	FT_Library freetype;
-	bool isBundleFile;
-	bool isOpen;
 
-	// A map of resource paths to FileData objects
 	std::map<StdString, Resource::FileData> fileMap;
 	std::vector<StdString> fileCompactList;
 	SDL_mutex *fileMapMutex;
 
-	// A map of resource paths to TextureData objects
 	std::map<StdString, Resource::TextureData> textureMap;
 	std::vector<StdString> textureCompactList;
 	SDL_mutex *textureMapMutex;
 
-	// A map of font keys to FontData objects
 	std::map<StdString, Resource::FontData> fontMap;
 	std::vector<StdString> fontCompactList;
 	SDL_mutex *fontMapMutex;
 
-	// A map of entry ID values to ArchiveEntry structs
 	std::map<uint64_t, Resource::ArchiveEntry> archiveEntryMap;
 
 	// Clear the file map

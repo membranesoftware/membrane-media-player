@@ -35,8 +35,7 @@
 #include "Database.h"
 #include "PlayMarker.h"
 
-const StdString PlayMarker::createTableSql = StdString ("CREATE TABLE IF NOT EXISTS PlayMarker(recordId TEXT PRIMARY KEY, markerTimestamps TEXT);");
-constexpr const char *selectSql = "SELECT recordId, markerTimestamps FROM PlayMarker";
+constexpr const char *selectSql = "SELECT recordId, markerTimestamps FROM ";
 constexpr const int selectColumnCount = 2;
 
 PlayMarker::PlayMarker () {
@@ -44,14 +43,16 @@ PlayMarker::PlayMarker () {
 PlayMarker::~PlayMarker () {
 }
 
-bool PlayMarker::readDatabaseRow (const StdString &databasePath, StdString *errorMessage) {
+bool PlayMarker::readDatabaseRow (const StdString &databasePath, const char *tableName, StdString *errorMessage) {
 	StdString sql;
 	OpResult result;
 
 	if (recordId.empty ()) {
 		return (false);
 	}
-	sql.sprintf ("%s WHERE recordId=", selectSql);
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (" WHERE recordId=");
 	sql.append (Database::getColumnValueSql (recordId));
 	sql.append (";");
 
@@ -78,7 +79,7 @@ int PlayMarker::readDatabaseRow_row (void *itPtr, int columnCount, char **column
 	return (0);
 }
 
-StdString PlayMarker::getUpdateSql () const {
+StdString PlayMarker::getUpdateSql (const char *tableName) const {
 	StdString s;
 	StringList fields;
 	int i;
@@ -87,7 +88,9 @@ StdString PlayMarker::getUpdateSql () const {
 		return (StdString ());
 	}
 	if (markerTimestamps.empty ()) {
-		s.assign ("DELETE FROM PlayMarker WHERE recordId=");
+		s.assign ("DELETE FROM ");
+		s.append (tableName);
+		s.append (" WHERE recordId=");
 		s.append (Database::getColumnValueSql (recordId));
 		s.append (";");
 	}
@@ -97,7 +100,7 @@ StdString PlayMarker::getUpdateSql () const {
 		fields.push_back (StdString ("markerTimestamps"));
 		fields.push_back (Database::getColumnValueSql (markerTimestamps.toJsonString ()));
 		s.assign ("INSERT INTO ");
-		s.append (Database::getRowInsertSql (StdString ("PlayMarker"), fields));
+		s.append (Database::getRowInsertSql (StdString (tableName), fields));
 
 		for (i = 0; i < 2; ++i) {
 			fields.erase (fields.begin ());
@@ -109,6 +112,20 @@ StdString PlayMarker::getUpdateSql () const {
 	return (s);
 }
 
-StdString PlayMarker::getDeleteAllSql () {
-	return (StdString ("DELETE FROM PlayMarker;"));
+StdString PlayMarker::getCreateTableSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("(recordId TEXT PRIMARY KEY, markerTimestamps TEXT);");
+	return (sql);
+}
+
+StdString PlayMarker::getDeleteAllSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("DELETE FROM ");
+	sql.append (tableName);
+	sql.append (";");
+	return (sql);
 }

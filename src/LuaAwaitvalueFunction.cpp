@@ -145,12 +145,16 @@ static bool awaitResult_exec (void *data) {
 	return (result);
 }
 static int exec (lua_State *L) {
-	char buf[1024];
+	char buf[1024], c;
 	char *args[2];
 	bool result;
 
 	LuaFunction::argvString (L, 1, &(args[0]));
 	LuaFunction::argvString (L, 2, &(args[1]), true);
+	if (! args[1]) {
+		c = '\0';
+		args[1] = &c;
+	}
 	result = LuaFunction::awaitResult (awaitResult_exec, args);
 	if (! result) {
 		snprintf (buf, sizeof (buf), "awaitvalue: control value not found; controlName=\"%s\"", args[0]);

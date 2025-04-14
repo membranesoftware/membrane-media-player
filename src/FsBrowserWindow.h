@@ -131,6 +131,7 @@ private:
 	StdString selectPromptText;
 	bool isLoading;
 	bool isFirstLoad;
+	bool isLoadingPathFieldTarget;
 	bool shouldLoadPath;
 	StdString loadPathTarget;
 	StdString lastLoadPathTarget;

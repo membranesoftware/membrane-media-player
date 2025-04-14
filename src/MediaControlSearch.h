@@ -36,23 +36,16 @@
 
 #include "MediaSearch.h"
 
+class JsonList;
+
 class MediaControlSearch : public MediaSearch {
 public:
 	MediaControlSearch ();
 	~MediaControlSearch ();
 
 	// Superclass override methods
-	void update (int msElapsed);
-
-protected:
-	// Superclass override methods
-	void doResetSearch (const StdString &searchKeyValue, int sortOrderValue);
-
-private:
-	// Task functions
-	static void findMediaItems (void *itPtr);
-	void executeFindMediaItems ();
-
-	std::list<MediaItem> mediaItemList;
+	bool initialize ();
+	void findMediaItems (JsonList *destList);
+	int getMediaAvailableCount ();
 };
 #endif

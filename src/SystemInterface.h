@@ -136,6 +136,7 @@ public:
 	static constexpr const char *Field_mtime = "mtime";
 	static constexpr const char *Field_n1 = "n1";
 	static constexpr const char *Field_name = "name";
+	static constexpr const char *Field_playSeekTimestamp = "playSeekTimestamp";
 	static constexpr const char *Field_publishTime = "publishTime";
 	static constexpr const char *Field_s1 = "s1";
 	static constexpr const char *Field_sortKey = "sortKey";

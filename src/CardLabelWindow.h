@@ -34,9 +34,12 @@
 #ifndef CARD_LABEL_WINDOW_H
 #define CARD_LABEL_WINDOW_H
 
+#include "WidgetHandle.h"
 #include "Panel.h"
 
+class Color;
 class Label;
+class LabelWindow;
 
 class CardLabelWindow : public Panel {
 public:
@@ -45,18 +48,26 @@ public:
 
 	// Read-only data members
 	double windowWidth;
-	StdString labelText;
+	StdString mainLabelText;
 
 	// Set the panel's fixed width
 	void setWindowWidth (double widthValue);
 
 	// Set text content for the main label
-	void setText (const StdString &text);
+	void setMainText (const StdString &text);
+
+	// Set text content for the left label
+	void setLeftText (const StdString &text, const Color &textColor = Color (), const Color &textBgColor = Color ());
 
 	// Superclass override methods
 	void reflow ();
 
 private:
-	Label *label;
+	// Populate content for the main label
+	void resetMainLabel ();
+
+	Label *mainLabel;
+	WidgetHandle<LabelWindow> leftLabelHandle;
+	LabelWindow *leftLabel;
 };
 #endif

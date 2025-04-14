@@ -38,6 +38,7 @@
 #include "UiConfiguration.h"
 #include "Panel.h"
 
+class Color;
 class Label;
 
 class LabelWindow : public Panel {

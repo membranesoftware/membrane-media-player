@@ -653,7 +653,18 @@ Buffer *OsUtil::readFile (const StdString &path) {
 }
 
 OpResult OsUtil::readFileLines (const StdString &path, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength) {
-	FILE *fp;
+	SDL_RWops *rw;
+	OpResult result;
+
+	rw = SDL_RWFromFile (path.c_str (), "r");
+	if (! rw) {
+		return (OpResult::FileOpenFailedError);
+	}
+	result = OsUtil::readFileLines (rw, callback, callbackData, maxLineLength);
+	SDL_RWclose (rw);
+	return (result);
+}
+OpResult OsUtil::readFileLines (SDL_RWops *rw, OsUtil::ReadFileLinesCallback callback, void *callbackData, int maxLineLength) {
 	uint8_t data[8192], *d, *end, *linestart;
 	char c, lastchar;
 	uint8_t bom1, bom2, bom3;
@@ -662,21 +673,17 @@ OpResult OsUtil::readFileLines (const StdString &path, OsUtil::ReadFileLinesCall
 	StdString line;
 	OpResult result;
 
-	if (maxLineLength < 0) {
+	if ((! rw) || (maxLineLength < 0)) {
 		return (OpResult::InvalidParamError);
 	}
 	line.reserve (maxLineLength);
 
-	fp = fopen (path.c_str (), "rb");
-	if (! fp) {
-		return (OpResult::FileOpenFailedError);
-	}
 	result = OpResult::Success;
 	firstline = true;
 	linelen = 0;
 	lastchar = 0;
 	while (true) {
-		readlen = (int) fread (data, 1, sizeof (data), fp);
+		readlen = SDL_RWread (rw, data, 1, sizeof (data));
 		if (readlen > 0) {
 			linestart = NULL;
 			d = data;
@@ -736,7 +743,6 @@ OpResult OsUtil::readFileLines (const StdString &path, OsUtil::ReadFileLinesCall
 			break;
 		}
 	}
-	fclose (fp);
 	if ((result == OpResult::Success) && (! line.empty ())) {
 		result = callback (callbackData, line);
 	}

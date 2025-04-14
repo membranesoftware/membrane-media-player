@@ -53,7 +53,6 @@ public:
 
 	// Read-only data members
 	StdString recordId;
-	int recordType;
 	bool isInverseColor;
 	double hoverPosition; // A negative value indicates that the mouse is positioned outside the timeline bar
 	double clickPosition;

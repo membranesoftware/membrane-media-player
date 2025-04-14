@@ -31,7 +31,6 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "Buffer.h"
 #include "OsUtil.h"
 #include "SubtitleReader.h"
 

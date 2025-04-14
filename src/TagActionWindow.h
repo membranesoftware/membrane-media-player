@@ -48,9 +48,6 @@ public:
 	TagActionWindow ();
 	~TagActionWindow ();
 
-	// Return a typecasted pointer to the provided widget, or NULL if the widget does not appear to be of the correct type
-	static TagActionWindow *castWidget (Widget *widget);
-
 	// Read-write data members
 	Widget::EventCallbackContext addClickCallback;
 	Widget::EventCallbackContext removeClickCallback;

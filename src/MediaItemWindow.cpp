@@ -40,6 +40,7 @@
 #include "MediaUtil.h"
 #include "MediaControl.h"
 #include "Json.h"
+#include "SystemInterface.h"
 #include "Sprite.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
@@ -52,22 +53,24 @@
 #include "TextFlow.h"
 #include "MediaItemWindow.h"
 
+constexpr const double bgColorValue = 0.475f;
+constexpr const int loadWaitDuration = 2250;
+constexpr const int64_t minSeekPositionAdvanceDuration = 20000;
+constexpr const double defaultThumbnailSeekPositionPercent = 15.0f;
+
 MediaItemWindow::MediaItemWindow (Json *mediaItemRecord)
 : Panel ()
+, isTagEnabled (false)
+, isPlayMarkerEnabled (false)
+, isLoadWaiting (true)
 , isPlayable (false)
 , isSelected (false)
-, playTimestamp (0)
 , mediaIconImageHandle (&mediaIconImage)
+, loadWaitClock (loadWaitDuration)
 {
 	classId = ClassId::MediaItemWindow;
-
-	setFillBg (true, Color (0.5f, 0.5f, 0.5f));
-	if (! mediaItem.readRecord (mediaItemRecord)) {
-		mediaId.assign ("");
-	}
-	else {
-		mediaId.assign (mediaItem.mediaId);
-	}
+	setFillBg (true, Color (bgColorValue, bgColorValue, bgColorValue));
+	mediaId = SystemInterface::instance->getCommandRecordId (mediaItemRecord);
 
 	mediaImage = add (new ImageWindow ());
 	mediaImage->isOffscreenUnloadEnabled = true;
@@ -90,6 +93,8 @@ MediaItemWindow::MediaItemWindow (Json *mediaItemRecord)
 	timestampLabel->setPaddingScale (1.0f, 0.5f);
 	timestampLabel->isInputSuspended = true;
 	timestampLabel->isVisible = false;
+
+	readRecord (mediaItemRecord);
 }
 MediaItemWindow::~MediaItemWindow () {
 }
@@ -129,75 +134,94 @@ void MediaItemWindow::setPlayTimestamp (int64_t timestamp) {
 	if (timestamp > mediaItem.duration) {
 		timestamp = mediaItem.duration;
 	}
-	if (playTimestamp == timestamp) {
+	if (mediaItem.playSeekTimestamp == timestamp) {
 		return;
 	}
-	playTimestamp = timestamp;
-	mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, playTimestamp, true);
-}
-
-bool MediaItemWindow::hasThumbnails () {
-	if (mediaItem.thumbnailTimestamps.empty () || (mediaItem.width <= 0) || (mediaItem.height <= 0)) {
-		return (false);
-	}
-	return (true);
+	mediaItem.playSeekTimestamp = timestamp;
+	mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, mediaItem.playSeekTimestamp, true);
 }
 
 void MediaItemWindow::setMediaIconImage (Sprite *iconSprite) {
 	mediaIconImageHandle.destroyAndAssign (new ImageWindow (new Image (iconSprite)));
 	mediaIconImage->isInputSuspended = true;
 	mediaIconImage->setDrawColor (true, UiConfiguration::instance->darkPrimaryColor);
-	mediaIconImage->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
+	mediaIconImage->setFillBg (true, Color (bgColorValue, bgColorValue, bgColorValue));
 	mediaIconImage->setPaddingScale (0.5f, 0.0f);
 	add (mediaIconImage, 3);
 }
 
-void MediaItemWindow::syncRecordStore () {
-	if (! mediaItem.readRecordStore (mediaId)) {
+void MediaItemWindow::readRecord (Json *mediaItemRecord) {
+	int64_t pos;
+
+	if (! mediaItem.readRecord (mediaItemRecord, true)) {
 		return;
 	}
 	if (mediaItem.isVideo) {
-		syncVideoItem ();
+		if (mediaItem.thumbnailTimestamps.empty ()) {
+			if ((mediaItem.width <= 0) || (mediaItem.height <= 0) || (mediaItem.duration <= 0)) {
+				setMediaIconImage (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallErrorIcon));
+				isLoadWaiting = false;
+			}
+			else {
+				if (mediaItem.playSeekTimestamp <= 0) {
+					if (mediaItem.duration < minSeekPositionAdvanceDuration) {
+						pos = 0;
+					}
+					else {
+						pos = (int64_t) ((double) mediaItem.duration * defaultThumbnailSeekPositionPercent / 100.0f);
+					}
+					mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, pos, true);
+				}
+				else {
+					mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, mediaItem.playSeekTimestamp, true);
+				}
+				mediaIconImageHandle.destroyAndClear ();
+			}
+		}
+		else {
+			if (mediaItem.playSeekTimestamp <= 0) {
+				pos = mediaItem.thumbnailTimestamps.at ((int) ((double) mediaItem.thumbnailTimestamps.size () * defaultThumbnailSeekPositionPercent / 100.0f));
+				mediaImage->loadImageFile (MediaControl::instance->getThumbnailPath (mediaId, pos), true);
+			}
+			else {
+				mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, mediaItem.playSeekTimestamp, true);
+			}
+			mediaIconImageHandle.destroyAndClear ();
+		}
+		isPlayable = true;
 	}
 	else if (mediaItem.isAudio) {
-		syncAudioItem ();
+		if (mediaItem.thumbnailTimestamps.empty () || (mediaItem.width <= 0) || (mediaItem.height <= 0)) {
+			if (mediaItem.hasAudioAlbumArt) {
+				mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, 0, true);
+			}
+			else {
+				setMediaIconImage (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_audioIcon));
+				isLoadWaiting = false;
+			}
+		}
+		else {
+			mediaImage->loadImageFile (MediaControl::instance->getThumbnailPath (mediaId, 0), true);
+			mediaIconImageHandle.destroyAndClear ();
+		}
+		isPlayable = true;
 	}
 	else {
 		isPlayable = false;
 		setMediaIconImage (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallErrorIcon));
+		isLoadWaiting = false;
 	}
 	shouldComposeRender = true;
 	reflow ();
 }
 
-void MediaItemWindow::syncAudioItem () {
-	if (hasThumbnails ()) {
-		mediaImage->loadImageFile (MediaControl::instance->getThumbnailPath (mediaId, 0), true);
-		mediaIconImageHandle.destroyAndClear ();
-	}
-	else {
-		setMediaIconImage (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_audioIcon));
-	}
-	isPlayable = true;
-}
+void MediaItemWindow::syncRecordStore () {
+	MediaItem m;
 
-void MediaItemWindow::syncVideoItem () {
-	int64_t pos;
-
-	if (mediaItem.thumbnailTimestamps.empty ()) {
-		setMediaIconImage (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_smallErrorIcon));
+	if (m.readRecordStore (mediaId)) {
+		mediaItem.tags.assign (m.tags);
+		reflow ();
 	}
-	else {
-		if (playTimestamp <= 0) {
-			pos = mediaItem.thumbnailTimestamps.at (mediaItem.thumbnailTimestamps.size () / 4);
-			mediaImage->loadImageFile (MediaControl::instance->getThumbnailPath (mediaId, pos), true);
-		}
-		else {
-			mediaImage->loadSeekTimestampVideoFrame (mediaItem.mediaPath, playTimestamp, true);
-		}
-		mediaIconImageHandle.destroyAndClear ();
-	}
-	isPlayable = true;
 }
 
 void MediaItemWindow::refreshDetailSize () {
@@ -217,8 +241,21 @@ void MediaItemWindow::refreshDetailSize () {
 	reflow ();
 }
 
+void MediaItemWindow::doUpdate (int msElapsed) {
+	Panel::doUpdate (msElapsed);
+	if (isLoadWaiting) {
+		loadWaitClock -= msElapsed;
+		if (loadWaitClock <= 0) {
+			isLoadWaiting = false;
+		}
+	}
+}
+
 void MediaItemWindow::mediaImageLoaded (void *itPtr, Widget *widgetPtr) {
-	((MediaItemWindow *) itPtr)->shouldComposeRender = true;
+	MediaItemWindow *it = (MediaItemWindow *) itPtr;
+
+	it->shouldComposeRender = true;
+	it->isLoadWaiting = false;
 }
 
 void MediaItemWindow::mediaImageClicked (void *itPtr, Widget *widgetPtr) {

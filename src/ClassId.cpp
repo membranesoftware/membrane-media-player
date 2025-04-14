@@ -253,29 +253,47 @@ const char *ClassId::classIdName (int id) {
 		case ClassId::MediaControl: {
 			return ("MediaControl");
 		}
-		case ClassId::MediaControlCleanWindow: {
-			return ("MediaControlCleanWindow");
+		case ClassId::MediaControlCleanFilescanTask: {
+			return ("MediaControlCleanFilescanTask");
 		}
-		case ClassId::MediaControlConfigureWindow: {
-			return ("MediaControlConfigureWindow");
+		case ClassId::MediaControlConfigureFilescanTask: {
+			return ("MediaControlConfigureFilescanTask");
 		}
-		case ClassId::MediaControlMainWindow: {
-			return ("MediaControlMainWindow");
+		case ClassId::MediaControlConfigureMainTask: {
+			return ("MediaControlConfigureMainTask");
 		}
-		case ClassId::MediaControlPrimeWindow: {
-			return ("MediaControlPrimeWindow");
+		case ClassId::MediaControlDatabaseExecTask: {
+			return ("MediaControlDatabaseExecTask");
 		}
-		case ClassId::MediaControlScanWindow: {
-			return ("MediaControlScanWindow");
+		case ClassId::MediaControlFilescanTask: {
+			return ("MediaControlFilescanTask");
+		}
+		case ClassId::MediaControlReadyTask: {
+			return ("MediaControlReadyTask");
 		}
 		case ClassId::MediaControlSearch: {
 			return ("MediaControlSearch");
 		}
-		case ClassId::MediaControlTaskStatusWindow: {
-			return ("MediaControlTaskStatusWindow");
+		case ClassId::MediaControlTask: {
+			return ("MediaControlTask");
 		}
-		case ClassId::MediaControlWindow: {
-			return ("MediaControlWindow");
+		case ClassId::MediaControlTaskWindow: {
+			return ("MediaControlTaskWindow");
+		}
+		case ClassId::MediaFilescanCleanWindow: {
+			return ("MediaFilescanCleanWindow");
+		}
+		case ClassId::MediaFilescanConfigureWindow: {
+			return ("MediaFilescanConfigureWindow");
+		}
+		case ClassId::MediaFilescanRunWindow: {
+			return ("MediaFilescanRunWindow");
+		}
+		case ClassId::MediaFilescanStatusWindow: {
+			return ("MediaFilescanStatusWindow");
+		}
+		case ClassId::MediaFilescanWindow: {
+			return ("MediaFilescanWindow");
 		}
 		case ClassId::MediaItem: {
 			return ("MediaItem");
@@ -294,6 +312,9 @@ const char *ClassId::classIdName (int id) {
 		}
 		case ClassId::MediaItemWindow: {
 			return ("MediaItemWindow");
+		}
+		case ClassId::MediaOptionWindow: {
+			return ("MediaOptionWindow");
 		}
 		case ClassId::MediaPlaylist: {
 			return ("MediaPlaylist");
@@ -321,6 +342,9 @@ const char *ClassId::classIdName (int id) {
 		}
 		case ClassId::MediaSearch: {
 			return ("MediaSearch");
+		}
+		case ClassId::MediaSearchGroup: {
+			return ("MediaSearchGroup");
 		}
 		case ClassId::MediaThumbnailWindow: {
 			return ("MediaThumbnailWindow");
@@ -361,11 +385,17 @@ const char *ClassId::classIdName (int id) {
 		case ClassId::PlayerWindow: {
 			return ("PlayerWindow");
 		}
+		case ClassId::PlayFileActionWindow: {
+			return ("PlayFileActionWindow");
+		}
 		case ClassId::PlayMarker: {
 			return ("PlayMarker");
 		}
 		case ClassId::Position: {
 			return ("Position");
+		}
+		case ClassId::PrefsKey: {
+			return ("PrefsKey");
 		}
 		case ClassId::Prng: {
 			return ("Prng");
@@ -510,6 +540,9 @@ const char *ClassId::classIdName (int id) {
 		}
 		case ClassId::UiTextId: {
 			return ("UiTextId");
+		}
+		case ClassId::VideoCycleWindow: {
+			return ("VideoCycleWindow");
 		}
 		case ClassId::Video: {
 			return ("Video");

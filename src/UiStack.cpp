@@ -36,17 +36,20 @@
 #include "Log.h"
 #include "Input.h"
 #include "HashMap.h"
+#include "PrefsKey.h"
 #include "Ui.h"
 #include "UiConfiguration.h"
 #include "SpriteId.h"
 #include "SpriteGroup.h"
 #include "Resource.h"
+#include "MediaControl.h"
 #include "Button.h"
 #include "UiText.h"
 #include "AppUrl.h"
 #include "Menu.h"
 #include "TextField.h"
 #include "Toolbar.h"
+#include "Video.h"
 #include "MainToolbarWindow.h"
 #include "TooltipWindow.h"
 #include "SettingsWindow.h"
@@ -70,7 +73,7 @@ constexpr const int PopUiCommand = 2;
 
 constexpr const double consoleWindowScale = 0.84f;
 constexpr const double sidebarWindowWidthScale = 0.33f;
-constexpr const int clearOverlayKeycode = SDLK_ESCAPE;
+constexpr const SDL_Keycode clearOverlayKeycode = SDLK_ESCAPE;
 
 UiStack::UiStack ()
 : isMouseHoverActive (false)
@@ -114,6 +117,7 @@ UiStack::UiStack ()
 	SdlUtil::createMutex (&nextCommandMutex);
 	SdlUtil::createMutex (&backgroundMutex);
 	SdlUtil::createMutex (&pointerMutex);
+	SdlUtil::createMutex (&videoEmbedMutex);
 }
 UiStack::~UiStack () {
 	clear ();
@@ -129,6 +133,7 @@ UiStack::~UiStack () {
 	SdlUtil::destroyMutex (&nextCommandMutex);
 	SdlUtil::destroyMutex (&backgroundMutex);
 	SdlUtil::destroyMutex (&pointerMutex);
+	SdlUtil::destroyMutex (&videoEmbedMutex);
 }
 
 void UiStack::createInstance () {
@@ -152,7 +157,7 @@ void UiStack::populateWidgets () {
 		mainToolbar->retain ();
 
 		prefs = App::instance->lockPrefs ();
-		enable = prefs->find (UiStack::showClockKey, false);
+		enable = prefs->find (PrefsKey::showClock, false);
 		App::instance->unlockPrefs ();
 
 		mainToolbarWindow = new MainToolbarWindow ();
@@ -188,6 +193,7 @@ void UiStack::clear () {
 	logWindowHandle.destroyAndClear ();
 	dialogWindowHandle.destroyAndClear ();
 	consoleWindowHandle.destroyAndClear ();
+	clearVideoEmbeds ();
 	stopPlayers ();
 
 	if (mainToolbarWindow) {
@@ -676,6 +682,7 @@ void UiStack::resize () {
 void UiStack::processShutdownEvent () {
 	Ui *ui;
 
+	clearVideoEmbeds ();
 	clearOverlay ();
 	stopPlayers ();
 	ui = getActiveUi ();
@@ -776,6 +783,10 @@ bool UiStack::processKeyEvent (SDL_Keycode keycode, bool isShiftDown, bool isCon
 	if (keycode == clearOverlayKeycode) {
 		if (isDarkenOverlayActive ()) {
 			clearOverlay ();
+			return (true);
+		}
+		if (appMenu) {
+			appMenuHandle.destroyAndClear ();
 			return (true);
 		}
 	}
@@ -916,6 +927,98 @@ void UiStack::suspendMouseHover () {
 	mouseHoverClock = UiConfiguration::instance->mouseHoverThreshold;
 	isMouseHoverActive = false;
 	isMouseHoverSuspended = true;
+}
+
+Video *UiStack::createVideoEmbed (double videoWidth, double videoHeight, const StdString &playPath, bool isResourcePlayPath, int soundMixVolume, bool isSoundMuted, bool isPlayLoop, int64_t playSeekTimestamp) {
+	UiStack::VideoEmbed item;
+	Video *video;
+
+	video = new Video (videoWidth, videoHeight, soundMixVolume);
+	video->setPlayPath (playPath, isResourcePlayPath);
+	video->retain ();
+
+	item.video = video;
+	item.isPlayLoop = isPlayLoop;
+	item.playSeekTimestamp = playSeekTimestamp;
+	SDL_LockMutex (videoEmbedMutex);
+	videoEmbedList.push_back (item);
+	SDL_UnlockMutex (videoEmbedMutex);
+
+	video->retain ();
+	if (playSeekTimestamp > 0) {
+		video->setPlaySeekTimestamp (playSeekTimestamp);
+	}
+	video->play (Widget::EventCallbackContext (UiStack::videoEmbedPlayEnded, this));
+	return (video);
+}
+
+void UiStack::clearVideoEmbeds () {
+	std::list<UiStack::VideoEmbed>::iterator i1, i2;
+
+	SDL_LockMutex (videoEmbedMutex);
+	i1 = videoEmbedList.begin ();
+	i2 = videoEmbedList.end ();
+	while (i1 != i2) {
+		if (i1->video) {
+			i1->video->stop ();
+			i1->video->release ();
+			i1->video = NULL;
+		}
+		++i1;
+	}
+	videoEmbedList.clear ();
+	SDL_UnlockMutex (videoEmbedMutex);
+}
+
+void UiStack::removeVideoEmbed (Video *video) {
+	std::list<UiStack::VideoEmbed>::iterator i1, i2;
+	bool found;
+
+	if (! video) {
+		return;
+	}
+	found = false;
+	SDL_LockMutex (videoEmbedMutex);
+	i1 = videoEmbedList.begin ();
+	i2 = videoEmbedList.end ();
+	while (i1 != i2) {
+		if (i1->video == video) {
+			found = true;
+			videoEmbedList.erase (i1);
+			break;
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (videoEmbedMutex);
+
+	if (found) {
+		video->stop ();
+		video->release ();
+	}
+}
+
+void UiStack::videoEmbedPlayEnded (void *itPtr, Widget *widgetPtr) {
+	((UiStack *) itPtr)->executeVideoEmbedPlayEnded ((Video *) widgetPtr);
+}
+void UiStack::executeVideoEmbedPlayEnded (Video *video) {
+	std::list<UiStack::VideoEmbed>::const_iterator i1, i2;
+	bool loop;
+
+	loop = false;
+	SDL_LockMutex (videoEmbedMutex);
+	i1 = videoEmbedList.cbegin ();
+	i2 = videoEmbedList.cend ();
+	while (i1 != i2) {
+		if (i1->video == video) {
+			loop = i1->isPlayLoop;
+			break;
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (videoEmbedMutex);
+	if (loop) {
+		video->play (Widget::EventCallbackContext (UiStack::videoEmbedPlayEnded, this));
+	}
 }
 
 void UiStack::appMenuButtonClicked (void *itPtr, Widget *widgetPtr) {
@@ -1115,6 +1218,7 @@ void UiStack::toggleLogWindow () {
 	}
 	clearOverlay ();
 	logWindowHandle.assign (new UiLogWindow (App::instance->rootPanel->width * sidebarWindowWidthScale, App::instance->rootPanel->height));
+	logWindow->clearCallback = Widget::EventCallbackContext (UiStack::logWindowClearClicked, this);
 	SDL_LockMutex (uiMutex);
 	if (activeUi) {
 		activeUi->clearPopupWidgets ();
@@ -1205,6 +1309,10 @@ void UiStack::consoleFileRun (void *itPtr, Widget *widgetPtr) {
 		Log::debug ("Failed to execute task LuaScript::run");
 		delete (lua);
 	}
+}
+
+void UiStack::logWindowClearClicked (void *itPtr, Widget *widgetPtr) {
+	MediaControl::instance->clearUiLog ();
 }
 
 void UiStack::showDialog (Panel *dialog) {
@@ -1307,8 +1415,13 @@ void UiStack::getPlayerControlOptions (int *soundMixVolume, bool *isSoundMuted, 
 	}
 }
 
-void UiStack::playMedia (const StdString &mediaId, int64_t seekTimestamp, bool isDetached) {
-	playerControl.playMedia (mediaId, seekTimestamp, isDetached);
+void UiStack::playMediaPath (const StdString &playPath, int64_t seekTimestamp, bool isDetached) {
+	playerControl.playMediaPath (playPath, seekTimestamp, isDetached);
+	assignOverlayZLevels ();
+}
+
+void UiStack::playMediaItem (const StdString &mediaId, int64_t seekTimestamp, bool isDetached) {
+	playerControl.playMediaItem (mediaId, seekTimestamp, isDetached);
 	assignOverlayZLevels ();
 }
 

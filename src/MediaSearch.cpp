@@ -32,10 +32,20 @@
 */
 #include "Config.h"
 #include "App.h"
+#include "SdlUtil.h"
+#include "OsUtil.h"
 #include "StringList.h"
+#include "Json.h"
 #include "RecordStore.h"
+#include "TaskGroup.h"
 #include "SystemInterface.h"
 #include "MediaSearch.h"
+
+// Stage values
+constexpr const int Uninitialized = 0;
+constexpr const int Running = 1;
+constexpr const int FindStart = 2;
+constexpr const int FindWait = 3;
 
 MediaSearch::MediaSearch ()
 : pageSize (MediaSearch::defaultPageSize)
@@ -47,21 +57,23 @@ MediaSearch::MediaSearch ()
 , resultOffset (0)
 , setSize (0)
 , searchReceiveCount (0)
-, stage (0)
+, stage (Uninitialized)
 , shouldReloadSearch (false)
 , shouldAdvanceSearch (false)
 , nextSortOrder (SystemInterface::Constant_NameSort)
-, refcountMutex (NULL)
 , refcount (0)
 {
-	refcountMutex = SDL_CreateMutex ();
+	SdlUtil::createMutex (&refcountMutex);
+	SdlUtil::createMutex (&recordIdMutex);
 }
 MediaSearch::~MediaSearch () {
+	SDL_LockMutex (recordIdMutex);
 	RecordStore::instance->remove (insertedRecordIds);
-	if (refcountMutex) {
-		SDL_DestroyMutex (refcountMutex);
-		refcountMutex = NULL;
-	}
+	insertedRecordIds.clear ();
+	SDL_UnlockMutex (recordIdMutex);
+
+	SdlUtil::destroyMutex (&refcountMutex);
+	SdlUtil::destroyMutex (&recordIdMutex);
 }
 
 void MediaSearch::retain () {
@@ -88,25 +100,19 @@ void MediaSearch::release () {
 	}
 }
 
-bool MediaSearch::eventCallback (const MediaSearch::EventCallbackContext &callback) {
-	if (! callback.callback) {
-		return (false);
-	}
-	callback.callback (callback.callbackData, this);
-	return (true);
-}
-
 void MediaSearch::resetSearch (const StdString &searchKeyValue, int sortOrderValue) {
-	doResetSearch (searchKeyValue, sortOrderValue);
+	nextSearchKey.assign (searchKeyValue);
+	nextSortOrder = sortOrderValue;
+	shouldReloadSearch = true;
 }
 void MediaSearch::resetSearch (const StdString &searchKeyValue) {
-	doResetSearch (searchKeyValue, sortOrder);
+	resetSearch (searchKeyValue, sortOrder);
 }
 void MediaSearch::resetSearch (int sortOrderValue) {
-	doResetSearch (searchKey, sortOrderValue);
+	resetSearch (searchKey, sortOrderValue);
 }
 void MediaSearch::resetSearch () {
-	doResetSearch (searchKey, sortOrder);
+	resetSearch (searchKey, sortOrder);
 }
 
 void MediaSearch::advanceSearch () {
@@ -117,8 +123,125 @@ void MediaSearch::advanceSearch () {
 }
 
 void MediaSearch::update (int msElapsed) {
+	StringList ids;
+
+	switch (stage) {
+		case Uninitialized: {
+			if (initialize ()) {
+				shouldReloadSearch = false;
+				shouldAdvanceSearch = false;
+				stage = FindStart;
+			}
+			break;
+		}
+		case Running: {
+			if (shouldReloadSearch) {
+				SDL_LockMutex (recordIdMutex);
+				insertedRecordIds.swap (ids);
+				SDL_UnlockMutex (recordIdMutex);
+				RecordStore::instance->remove (ids);
+				shouldReloadSearch = false;
+				stage = FindStart;
+			}
+			else if (shouldAdvanceSearch) {
+				shouldAdvanceSearch = false;
+				isLoading = true;
+				resultOffset += pageSize;
+				stage = FindWait;
+				retain ();
+				TaskGroup::instance->run (TaskGroup::RunContext (MediaSearch::loadSearchResults, this));
+			}
+			else {
+				mediaAvailableCount = getMediaAvailableCount ();
+			}
+			break;
+		}
+		case FindStart: {
+			searchKey.assign (nextSearchKey);
+			sortOrder = nextSortOrder;
+			isLoading = true;
+			resultOffset = 0;
+			setSize = 0;
+			isFindComplete = false;
+			shouldAdvanceSearch = false;
+			searchReceiveCount = 0;
+			lastStatusUpdateTime = OsUtil::getTime ();
+			stage = FindWait;
+			retain ();
+			TaskGroup::instance->run (TaskGroup::RunContext (MediaSearch::loadSearchResults, this));
+			break;
+		}
+		case FindWait: {
+			if (! isLoading) {
+				if (searchReceiveCount >= setSize) {
+					isFindComplete = true;
+				}
+				shouldAdvanceSearch = false;
+				stage = Running;
+				break;
+			}
+			break;
+		}
+	}
+}
+
+bool MediaSearch::initialize () {
+	// Default method takes no action
+	return (true);
+}
+
+void MediaSearch::loadSearchResults (void *itPtr) {
+	MediaSearch *it = (MediaSearch *) itPtr;
+	JsonList records;
+
+	it->findMediaItems (&records);
+	it->processSearchResults (records);
+	it->lastStatusUpdateTime = OsUtil::getTime ();
+	it->isLoading = false;
+	it->release ();
+}
+void MediaSearch::processSearchResults (const JsonList &records) {
+	JsonList::const_iterator i1, i2;
+	Json *record;
+	StdString id;
+	StringList ids;
+
+	i1 = records.cbegin ();
+	i2 = records.cend ();
+	while (i1 != i2) {
+		record = *i1;
+		if (SystemInterface::instance->getCommandId (record) == SystemInterface::CommandId_MediaItem) {
+			RecordStore::instance->insert (record, true);
+			id = SystemInterface::instance->getCommandRecordId (record);
+			ids.push_back (id);
+			++searchReceiveCount;
+		}
+		++i1;
+	}
+
+	SDL_LockMutex (recordIdMutex);
+	insertedRecordIds.append (ids);
+	searchResultRecordIds.append (ids);
+	SDL_UnlockMutex (recordIdMutex);
+}
+void MediaSearch::findMediaItems (JsonList *destList) {
 	// Default method takes no action
 }
-void MediaSearch::doResetSearch (const StdString &searchKeyValue, int sortOrderValue) {
+
+void MediaSearch::getInsertedRecordIds (StringList *destList) {
+	SDL_LockMutex (recordIdMutex);
+	destList->append (insertedRecordIds);
+	SDL_UnlockMutex (recordIdMutex);
+}
+
+void MediaSearch::getSearchResultRecordIds (StringList *destList) {
+	SDL_LockMutex (recordIdMutex);
+	destList->append (searchResultRecordIds);
+	searchResultRecordIds.clear ();
+	SDL_UnlockMutex (recordIdMutex);
+}
+
+int MediaSearch::getMediaAvailableCount () {
 	// Default method takes no action
+	return (-1);
 }

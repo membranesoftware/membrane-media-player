@@ -31,48 +31,34 @@
 * If you have questions regarding this License Agreement, please contact Membrane Software by sending an email to support@membranesoftware.com.
 */
 #include "Config.h"
-#include "App.h"
 #include "SdlUtil.h"
-#include "OsUtil.h"
-#include "TaskGroup.h"
-#include "Database.h"
 #include "Log.h"
+#include "OsUtil.h"
+#include "StringList.h"
+#include "Database.h"
 #include "UiLog.h"
 
 UiLog *UiLog::instance = NULL;
 
-constexpr const char *createTableSql = "CREATE TABLE IF NOT EXISTS Message(line INTEGER, createTime INTEGER, options INTEGER, messageText TEXT); CREATE INDEX IF NOT EXISTS MessageLine ON Message(line); CREATE INDEX IF NOT EXISTS MessageCreateTime ON Message(createTime);";
-constexpr const char *selectSql = "SELECT line, createTime, options, messageText FROM Message";
-constexpr const int selectColumnCount = 4;
+constexpr const int64_t defaultMaxLogSize = 128 * 1024;
 constexpr const char *metadataTableName = "MessageMetadata";
 constexpr const int metadataVersion = 1;
 
-constexpr const int Uninitialized = 0;
-constexpr const int InitializeWait1 = 1;
-constexpr const int InitializeWait2 = 2;
-constexpr const int Running = 3;
-constexpr const int StoreMessageRecordsWait1 = 4;
-constexpr const int StoreMessageRecordsWait2 = 5;
-constexpr const int ClearWait1 = 6;
-constexpr const int ClearWait2 = 7;
-
 UiLog::UiLog ()
-: isReady (false)
-, maxMessageAge (-1)
-, lastMessageLine (0)
-, isClearing (false)
-, stage (Uninitialized)
-, isDatabaseOpen (false)
+: nextMessageLine (1)
+, logSize (0)
+, maxLogSize (defaultMaxLogSize)
+, loadMessageMaxLine (0)
+, loadMessageTrimLine (0)
+, loadMessageLogSize (0)
+, loadMessageMaxLogSize (0)
 {
-	SdlUtil::createMutex (&writeMessageListMutex);
+	SdlUtil::createMutex (&messageListMutex);
+	SdlUtil::createMutex (&callbackListMutex);
 }
 UiLog::~UiLog () {
-	if (isDatabaseOpen && (! databasePath.empty ())) {
-		Database::instance->close (databasePath);
-		databasePath.assign ("");
-		isDatabaseOpen = false;
-	}
-	SdlUtil::destroyMutex (&writeMessageListMutex);
+	SdlUtil::destroyMutex (&messageListMutex);
+	SdlUtil::destroyMutex (&callbackListMutex);
 }
 
 void UiLog::createInstance () {
@@ -87,224 +73,70 @@ void UiLog::freeInstance () {
 	}
 }
 
-void UiLog::configure (const StdString &databasePathValue, int maxMessageAgeValue) {
-	databasePath.assign (databasePathValue);
-	maxMessageAge = maxMessageAgeValue;
-}
-
 void UiLog::clear () {
-	isClearing = true;
+	SDL_LockMutex (messageListMutex);
+	messageList.clear ();
+	nextMessageLine = 1;
+	logSize = 0;
+	SDL_UnlockMutex (messageListMutex);
 }
 
-void UiLog::update (int msElapsed) {
-	int count;
-
-	switch (stage) {
-		case Uninitialized: {
-			if (databasePath.empty ()) {
-				break;
-			}
-			stage = InitializeWait1;
-			TaskGroup::instance->run (TaskGroup::RunContext (UiLog::initialize, this));
-			break;
-		}
-		case InitializeWait1: {
-			break;
-		}
-		case InitializeWait2: {
-			isReady = true;
-			stage = Running;
-			break;
-		}
-		case Running: {
-			if (isClearing) {
-				SDL_LockMutex (writeMessageListMutex);
-				writeMessageList.clear ();
-				SDL_UnlockMutex (writeMessageListMutex);
-				lastMessageLine = 0;
-				stage = ClearWait1;
-				TaskGroup::instance->run (TaskGroup::RunContext (UiLog::removeAllRecords, this));
-				break;
-			}
-			SDL_LockMutex (writeMessageListMutex);
-			count = (int) writeMessageList.size ();
-			SDL_UnlockMutex (writeMessageListMutex);
-			if (count > 0) {
-				stage = StoreMessageRecordsWait1;
-				TaskGroup::instance->run (TaskGroup::RunContext (UiLog::storeMessageRecords, this));
-			}
-			break;
-		}
-		case StoreMessageRecordsWait1: {
-			break;
-		}
-		case StoreMessageRecordsWait2: {
-			stage = Running;
-			break;
-		}
-		case ClearWait1: {
-			break;
-		}
-		case ClearWait2: {
-			SDL_LockMutex (writeMessageListMutex);
-			writeMessageList.clear ();
-			SDL_UnlockMutex (writeMessageListMutex);
-			isClearing = false;
-			stage = Running;
-			break;
-		}
-	}
+void UiLog::setNextMessageLine (int line) {
+	SDL_LockMutex (messageListMutex);
+	nextMessageLine = line;
+	SDL_UnlockMutex (messageListMutex);
 }
 
-void UiLog::initialize (void *itPtr) {
-	UiLog *it = (UiLog *) itPtr;
-	OpResult result;
-
-	result = it->executeInitialize ();
-	if (result != OpResult::Success) {
-		it->stage = Uninitialized;
-	}
-	else {
-		it->stage = InitializeWait2;
-	}
-}
-OpResult UiLog::executeInitialize () {
-	OpResult result;
-	StdString errmsg;
-
-	result = openDatabase ();
-	if (result == OpResult::Success) {
-		if (! removeMaxAgeRecords (&errmsg)) {
-			Log::debug ("Failed to open database; err=\"%s\"", errmsg.c_str ());
-			return (OpResult::MalformedDataError);
-		}
-	}
-	if (result == OpResult::Success) {
-		lastMessageLine = readMaxMessageLine (&errmsg);
-		if (lastMessageLine < 0) {
-			Log::debug ("Failed to open database; err=\"%s\"", errmsg.c_str ());
-			return (OpResult::MalformedDataError);
-		}
-	}
-	return (result);
-}
-
-OpResult UiLog::setDatabasePath (const StdString &databasePathValue) {
-	if (databasePathValue.empty ()) {
-		return (OpResult::InvalidParamError);
-	}
-	if (databasePath.equals (databasePathValue)) {
-		return (OpResult::Success);
-	}
-	if (! databasePath.empty ()) {
-		Database::instance->close (databasePath);
-	}
-	databasePath.assign (databasePathValue);
-	return (openDatabase ());
-}
-
-OpResult UiLog::openDatabase () {
-	OpResult result;
-	int version;
-
-	if (databasePath.empty ()) {
-		return (OpResult::InvalidConfigurationError);
-	}
-	result = Database::instance->open (databasePath);
-	if (result == OpResult::Success) {
-		isDatabaseOpen = true;
-		result = Database::instance->exec (databasePath, createTableSql);
-	}
-	if (result == OpResult::Success) {
-		result = Database::instance->createMetadataTable (databasePath, StdString (metadataTableName));
-	}
-	if (result == OpResult::Success) {
-		version = Database::instance->readMetadataVersion (databasePath, StdString (metadataTableName));
-		if (version < metadataVersion) {
-			Database::instance->writeMetadataVersion (databasePath, StdString (metadataTableName), metadataVersion);
-		}
-	}
-	return (result);
-}
-
-void UiLog::storeMessageRecords (void *itPtr) {
-	UiLog *it = (UiLog *) itPtr;
-
-	it->executeStoreMessageRecords ();
-	it->stage = StoreMessageRecordsWait2;
-}
-void UiLog::executeStoreMessageRecords () {
-	std::list<UiLog::Message> msglist;
-	std::list<UiLog::Message>::const_iterator i1, i2;
-	StdString sql, errmsg;
-	StringList fields;
-	OpResult result;
-	int maxline;
-
-	SDL_LockMutex (writeMessageListMutex);
-	msglist.swap (writeMessageList);
-	SDL_UnlockMutex (writeMessageListMutex);
-	maxline = lastMessageLine;
-	i1 = msglist.cbegin ();
-	i2 = msglist.cend ();
-	while (i1 != i2) {
-		fields.clear ();
-		fields.push_back (StdString ("line"));
-		fields.push_back (Database::getColumnValueSql (maxline + 1));
-		fields.push_back (StdString ("createTime"));
-		fields.push_back (Database::getColumnValueSql (i1->createTime));
-		fields.push_back (StdString ("options"));
-		fields.push_back (Database::getColumnValueSql (i1->options));
-		fields.push_back (StdString ("messageText"));
-		fields.push_back (Database::getColumnValueSql (i1->text));
-
-		sql.assign ("INSERT INTO ");
-		sql.append (Database::getRowInsertSql (StdString ("Message"), fields));
-		result = Database::instance->exec (databasePath, sql, &errmsg);
-		if (result != OpResult::Success) {
-			Log::debug ("Failed to store message record; err=\"%s\"", errmsg.c_str ());
-		}
-		else {
-			++maxline;
-		}
-		++i1;
-	}
-
-	lastMessageLine = maxline;
-}
-
-void UiLog::removeAllRecords (void *itPtr) {
-	UiLog *it = (UiLog *) itPtr;
-
-	it->executeRemoveAllRecords ();
-	it->stage = ClearWait2;
-}
-void UiLog::executeRemoveAllRecords () {
-	StdString sql;
-	OpResult result;
-	StdString errmsg;
-
-	sql.assign ("DELETE FROM Message;");
-	result = Database::instance->exec (databasePath, sql, &errmsg);
-	if (result != OpResult::Success) {
-		Log::debug ("Failed to write to database; err=\"%s\"", errmsg.c_str ());
-		return;
-	}
-	lastMessageLine = 0;
+void UiLog::setMaxLogSize (int64_t maxLogSizeValue) {
+	SDL_LockMutex (messageListMutex);
+	maxLogSize = maxLogSizeValue;
+	SDL_UnlockMutex (messageListMutex);
 }
 
 void UiLog::voutput (int options, const char *str, va_list args) {
 	UiLog::Message msg;
+	std::list<UiLog::MessageCallbackContext>::const_iterator i1, i2;
+	std::list<UiLog::Message>::iterator j;
+	bool trim;
 
-	if (isClearing) {
+	msg.text.vsprintf (str, args);
+	if (msg.text.empty ()) {
 		return;
 	}
+	trim = false;
 	msg.createTime = OsUtil::getTime ();
 	msg.options = options;
-	msg.text.vsprintf (str, args);
-	SDL_LockMutex (writeMessageListMutex);
-	writeMessageList.push_back (msg);
-	SDL_UnlockMutex (writeMessageListMutex);
+	SDL_LockMutex (messageListMutex);
+	msg.line = nextMessageLine;
+	messageList.push_back (msg);
+	++nextMessageLine;
+	logSize += msg.text.size ();
+	if ((maxLogSize > 0) && (logSize > maxLogSize)) {
+		trim = true;
+	}
+	SDL_UnlockMutex (messageListMutex);
+
+	SDL_LockMutex (callbackListMutex);
+	i1 = callbackList.cbegin ();
+	i2 = callbackList.cend ();
+	while (i1 != i2) {
+		i1->addMessageCallback (i1->callbackData, msg);
+		++i1;
+	}
+	SDL_UnlockMutex (callbackListMutex);
+
+	if (trim) {
+		SDL_LockMutex (messageListMutex);
+		while (logSize > maxLogSize) {
+			if (messageList.empty ()) {
+				break;
+			}
+			j = messageList.begin ();
+			logSize -= j->text.size ();
+			messageList.erase (j);
+		}
+		SDL_UnlockMutex (messageListMutex);
+	}
 }
 
 void UiLog::write (int options, const char *str, ...) {
@@ -318,109 +150,223 @@ void UiLog::write (int options, const char *str, va_list args) {
 	UiLog::instance->voutput (options, str, args);
 }
 
-bool UiLog::readRecords (StdString *errorMessage, std::list<UiLog::Message> *destList, int messageLine, int direction, int limit) {
+void UiLog::processMessages (UiLog::ProcessMessageFunction processFn, void *processFnData) {
+	std::list<UiLog::Message>::const_iterator i1, i2;
+
+	SDL_LockMutex (messageListMutex);
+	i1 = messageList.cbegin ();
+	i2 = messageList.cend ();
+	while (i1 != i2) {
+		processFn (processFnData, *i1);
+		++i1;
+	}
+	SDL_UnlockMutex (messageListMutex);
+}
+
+void UiLog::addListener (void *callbackData, UiLog::ProcessMessageFunction addMessageCallback) {
+	std::list<UiLog::MessageCallbackContext>::iterator i1, i2;
+	bool found;
+
+	SDL_LockMutex (callbackListMutex);
+	found = false;
+	i1 = callbackList.begin ();
+	i2 = callbackList.end ();
+	while (i1 != i2) {
+		if (i1->callbackData == callbackData) {
+			found = true;
+			i1->addMessageCallback = addMessageCallback;
+			break;
+		}
+		++i1;
+	}
+	if (! found) {
+		callbackList.push_back (UiLog::MessageCallbackContext (callbackData, addMessageCallback));
+	}
+	SDL_UnlockMutex (callbackListMutex);
+}
+
+void UiLog::removeListener (void *callbackData) {
+	std::list<UiLog::MessageCallbackContext>::iterator i1, i2;
+
+	SDL_LockMutex (callbackListMutex);
+	i1 = callbackList.begin ();
+	i2 = callbackList.end ();
+	while (i1 != i2) {
+		if (i1->callbackData == callbackData) {
+			callbackList.erase (i1);
+			break;
+		}
+		++i1;
+	}
+	SDL_UnlockMutex (callbackListMutex);
+}
+
+constexpr const char *selectSql = "SELECT line, createTime, options, messageText FROM ";
+constexpr const int selectColumnCount = 4;
+bool UiLog::loadMessages (const StdString &databasePath, const char *tableName, StdString *errorMessage) {
+	StdString sql, errmsg;
+
+	if (errorMessage) {
+		errorMessage->assign ("");
+	}
+	clear ();
+	loadMessageList.clear ();
+	loadMessageMaxLine = 0;
+	loadMessageTrimLine = -1;
+	loadMessageLogSize = 0;
+	SDL_LockMutex (messageListMutex);
+	loadMessageMaxLogSize = maxLogSize;
+	SDL_UnlockMutex (messageListMutex);
+
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (" ORDER BY line ASC;");
+	if (Database::instance->exec (databasePath, sql, errorMessage, UiLog::loadMessages_row, this) != OpResult::Success) {
+		loadMessageList.clear ();
+		return (false);
+	}
+	SDL_LockMutex (messageListMutex);
+	messageList.swap (loadMessageList);
+	nextMessageLine = loadMessageMaxLine + 1;
+	logSize = loadMessageLogSize;
+	SDL_UnlockMutex (messageListMutex);
+
+	if (loadMessageTrimLine >= 0) {
+		sql.assign ("DELETE FROM ");
+		sql.append (tableName);
+		sql.appendSprintf (" WHERE (line <= %i);", loadMessageTrimLine);
+		if (Database::instance->exec (databasePath, sql, &errmsg) != OpResult::Success) {
+			Log::debug ("Failed to store application data; err=%s", errmsg.c_str ());
+		}
+	}
+	return (true);
+}
+int UiLog::loadMessages_row (void *itPtr, int columnCount, char **columnValues, char **columnNames) {
+	UiLog *it = (UiLog *) itPtr;
+	UiLog::Message msg;
+
+	if (! UiLog::copyDatabaseRowValues (&msg, columnCount, columnValues, columnNames)) {
+		return (-1);
+	}
+	it->appendLoadMessage (msg);
+	return (0);
+}
+void UiLog::appendLoadMessage (const UiLog::Message &msg) {
+	std::list<UiLog::Message>::iterator i;
+
+	loadMessageList.push_back (msg);
+	if (msg.line > loadMessageMaxLine) {
+		loadMessageMaxLine = msg.line;
+	}
+	loadMessageLogSize += msg.text.size ();
+	if (loadMessageMaxLogSize > 0) {
+		while (loadMessageLogSize > loadMessageMaxLogSize) {
+			if (loadMessageList.empty ()) {
+				break;
+			}
+			i = loadMessageList.begin ();
+			if ((loadMessageTrimLine < 0) || (i->line > loadMessageTrimLine)) {
+				loadMessageTrimLine = i->line;
+			}
+			loadMessageLogSize -= i->text.size ();
+			loadMessageList.erase (i);
+		}
+	}
+}
+
+StdString UiLog::getCreateTableSql (const char *tableName) {
+	StdString sql;
+
+	sql.assign ("CREATE TABLE IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("(line INTEGER, createTime INTEGER, options INTEGER, messageText TEXT);");
+
+	sql.append ("CREATE INDEX IF NOT EXISTS ");
+	sql.append (tableName);
+	sql.append ("Line ON ");
+	sql.append (tableName);
+	sql.append ("(line);");
+
+	return (sql);
+}
+
+void UiLog::getInsertMessageSql (const UiLog::Message &message, const char *tableName, StringList *destList) {
+	StringList fields;
+	StdString sql;
+
+	if (! destList) {
+		return;
+	}
+	fields.push_back (StdString ("line"));
+	fields.push_back (Database::getColumnValueSql (message.line));
+	fields.push_back (StdString ("createTime"));
+	fields.push_back (Database::getColumnValueSql (message.createTime));
+	fields.push_back (StdString ("options"));
+	fields.push_back (Database::getColumnValueSql (message.options));
+	fields.push_back (StdString ("messageText"));
+	fields.push_back (Database::getColumnValueSql (message.text));
+
+	sql.assign ("INSERT INTO ");
+	sql.append (Database::getRowInsertSql (StdString (tableName), fields));
+	sql.append (";");
+	destList->push_back (sql);
+}
+
+bool UiLog::readDatabaseRows (const StdString &databasePath, const char *tableName, StdString *errorMessage, std::list<UiLog::Message> *destList, int offset, int limit) {
 	StdString sql;
 	OpResult result;
 
 	destList->clear ();
-	if (!(isReady && isDatabaseOpen)) {
-		if (errorMessage) {
-			errorMessage->assign ("Database not available");
-		}
-		return (false);
-	}
-
-	sql.sprintf ("%s WHERE (line %s %i)", selectSql, (direction >= 0) ? ">" : "<", messageLine);
-	if (limit > 0) {
-		sql.appendSprintf (" LIMIT %i", limit);
-	}
-	sql.append (";");
-
-	result = Database::instance->exec (databasePath, sql, errorMessage, UiLog::readRecords_row, destList);
-	if (result != OpResult::Success) {
-		return (false);
-	}
 	if (errorMessage) {
 		errorMessage->assign ("");
+	}
+	sql.assign (selectSql);
+	sql.append (tableName);
+	sql.append (" ORDER BY line ASC");
+	if (limit > 0) {
+		sql.appendSprintf (" LIMIT %i", limit);
+		if (offset > 0) {
+			sql.appendSprintf (" OFFSET %i", offset);
+		}
+	}
+	sql.append (";");
+	result = Database::instance->exec (databasePath, sql, errorMessage, UiLog::readDatabaseRows_row, destList);
+	if (result != OpResult::Success) {
+		return (false);
 	}
 	return (true);
 }
-int UiLog::readRecords_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames) {
+int UiLog::readDatabaseRows_row (void *destListPtr, int columnCount, char **columnValues, char **columnNames) {
 	UiLog::Message msg;
-	char *val;
 
-	if (columnCount != selectColumnCount) {
+	if (! UiLog::copyDatabaseRowValues (&msg, columnCount, columnValues, columnNames)) {
 		return (-1);
 	}
-	val = columnValues[0];
-	msg.line = val ? StdString (val).parsedInt ((int) 0) : 0;
-
-	val = columnValues[1];
-	msg.createTime = val ? StdString (val).parsedInt ((int64_t) 0) : 0;
-
-	val = columnValues[2];
-	msg.options = val ? StdString (val).parsedInt ((int) 0) : 0;
-
-	val = columnValues[3];
-	msg.text.assign (val ? val : "");
-
 	((std::list<UiLog::Message> *) destListPtr)->push_back (msg);
 	return (0);
 }
+bool UiLog::copyDatabaseRowValues (UiLog::Message *destMessage, int columnCount, char **columnValues, char **columnNames) {
+	int i;
+	char *val;
 
-int UiLog::readMaxMessageLine (StdString *errorMessage) {
-	StdString sql;
-	OpResult result;
-	int maxline;
-
-	sql.assign ("SELECT MAX(line) FROM Message;");
-	maxline = 0;
-	result = Database::instance->exec (databasePath, sql, errorMessage, Database::selectAggregate_row, &maxline);
-	if (result != OpResult::Success) {
-		return (-1);
-	}
-	if (errorMessage) {
-		errorMessage->assign ("");
-	}
-	return (maxline);
-}
-
-bool UiLog::removeMaxAgeRecords (StdString *errorMessage) {
-	StdString sql;
-	OpResult result;
-	int64_t t;
-	int minline;
-
-	if (maxMessageAge < 0) {
-		return (true);
-	}
-	sql.assign ("DELETE FROM Message");
-	if (maxMessageAge > 0) {
-		t = OsUtil::getTime () - (((int64_t) maxMessageAge) * 1000);
-		sql.appendSprintf (" WHERE (createTime < %lli)", (long long int) t);
-	}
-	sql.append (";");
-	result = Database::instance->exec (databasePath, sql, errorMessage);
-	if (result != OpResult::Success) {
+	if (columnCount < selectColumnCount) {
 		return (false);
 	}
+	i = 0;
+	val = columnValues[i];
+	destMessage->line = val ? StdString (val).parsedInt ((int) 0) : 0;
 
-	sql.assign ("SELECT MIN(line) FROM Message;");
-	minline = 0;
-	result = Database::instance->exec (databasePath, sql, errorMessage, Database::selectAggregate_row, &minline);
-	if (result != OpResult::Success) {
-		return (false);
-	}
-	if (minline > 1) {
-		sql.sprintf ("UPDATE Message SET line = (line - %i);", minline - 1);
-		result = Database::instance->exec (databasePath, sql, errorMessage);
-		if (result != OpResult::Success) {
-			return (false);
-		}
-	}
+	++i;
+	val = columnValues[i];
+	destMessage->createTime = val ? StdString (val).parsedInt ((int64_t) 0) : 0;
 
-	if (errorMessage) {
-		errorMessage->assign ("");
-	}
+	++i;
+	val = columnValues[i];
+	destMessage->options = val ? StdString (val).parsedInt ((int) 0) : 0;
+
+	++i;
+	val = columnValues[i];
+	destMessage->text.assign (val ? val : "");
+
 	return (true);
 }

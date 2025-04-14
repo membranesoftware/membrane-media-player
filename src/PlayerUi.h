@@ -42,46 +42,42 @@
 
 class Json;
 class Sprite;
+class MediaItem;
+class MediaPlaylist;
 class Button;
 class Toggle;
 class Panel;
-class MediaSearch;
 class HelpWindow;
+class LabelWindow;
 class CardLabelWindow;
 class IconLabelWindow;
 class TextCardWindow;
 class TextFieldWindow;
 class AppCardWindow;
+class MediaOptionWindow;
 class MediaItemWindow;
-class MediaControlWindow;
-class MediaPlaylist;
+class MediaFilescanWindow;
 class MediaPlaylistWindow;
+class PlayFileActionWindow;
 
 class PlayerUi : public Ui {
 public:
 	PlayerUi ();
 	~PlayerUi ();
 
-	// Prefs keys
-	static constexpr const char *appCardExpandedKey = "PlayerUiA";
-	static constexpr const char *imageSizeKey = "PlayerUiB";
-	static constexpr const char *sortOrderKey = "PlayerUiC";
-	static constexpr const char *windowModeKey = "PlayerUiD";
-	static constexpr const char *showPlaylistsKey = "PlayerUiE";
-	static constexpr const char *soundMixVolumeKey = "PlayerUiF";
-	static constexpr const char *soundMutedKey = "PlayerUiG";
-	static constexpr const char *mediaControlWindowExpandedKey = "PlayerUiH";
-	static constexpr const char *startUpdateKey = "PlayerUiI";
-	static constexpr const char *showAppNewsKey = "PlayerUiJ";
-	static constexpr const char *visualizerTypeKey = "PlayerUiK";
-	static constexpr const char *subtitleEnabledKey = "PlayerUiL";
+	struct Options {
+		bool showPlayHistory;
+		bool showPlaylists;
+		Options ():
+			showPlayHistory (false),
+			showPlaylists (false) { }
+	};
 
 	// Superclass override methods
 	void setHelpWindowContent (HelpWindow *helpWindow);
 
 protected:
 	// Superclass override methods
-	StdString getSpritePath ();
 	Widget *createBreadcrumbWidget ();
 	OpResult doLoad ();
 	void doUnload ();
@@ -92,6 +88,7 @@ protected:
 	void doUpdate (int msElapsed);
 	void doResize ();
 	void doSyncRecordStore ();
+	bool doProcessKeyEvent (SDL_Keycode keycode, bool isShiftDown, bool isControlDown);
 	Widget *findLuaOpenWidget (const char *targetName);
 	Widget *findLuaTargetWidget (const char *targetName);
 	void executeLuaOpen (Widget *targetWidget);
@@ -104,6 +101,16 @@ private:
 	// Callback functions
 	static void doResize_processItems (void *itPtr, Widget *itemWidget);
 	static void expandPlaylistsToggleStateChanged (void *itPtr, Widget *widgetPtr);
+	static void navigateButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void navigateMediaOptionsClicked (void *itPtr, Widget *widgetPtr);
+	static void navigatePlaylistsClicked (void *itPtr, Widget *widgetPtr);
+	static void navigatePlayHistoryClicked (void *itPtr, Widget *widgetPtr);
+	static void navigateMediaScanClicked (void *itPtr, Widget *widgetPtr);
+	static void mediaOptionWindowExpandStateChanged (void *itPtr, Widget *widgetPtr);
+	static void mediaOptionWindowLayoutChanged (void *itPtr, Widget *widgetPtr);
+	static void mediaOptionWindowConfigured (void *itPtr, Widget *widgetPtr);
+	static void fileMediaOpenButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void fileMediaReadComplete (void *itPtr, Widget *widgetPtr);
 	static void mediaItemWindowImageClicked (void *itPtr, Widget *widgetPtr);
 	static void mediaItemWindowViewButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void mediaItemWindowSelectStateChanged (void *itPtr, Widget *widgetPtr);
@@ -117,9 +124,8 @@ private:
 	static void sortByNameActionClicked (void *itPtr, Widget *widgetPtr);
 	static void sortByNewestActionClicked (void *itPtr, Widget *widgetPtr);
 	static void sortByFilePathActionClicked (void *itPtr, Widget *widgetPtr);
-	static void showPlaylistsActionClicked (void *itPtr, Widget *widgetPtr);
-	static void mediaControlWindowExpandStateChanged (void *itPtr, Widget *widgetPtr);
-	static void mediaControlWindowLayoutChanged (void *itPtr, Widget *widgetPtr);
+	static void mediaFilescanWindowExpandStateChanged (void *itPtr, Widget *widgetPtr);
+	static void mediaFilescanWindowLayoutChanged (void *itPtr, Widget *widgetPtr);
 	static void appCardExpandStateChanged (void *itPtr, Widget *widgetPtr);
 	static void appCardLayoutChanged (void *itPtr, Widget *widgetPtr);
 	static void playButtonFocused (void *itPtr, Widget *widgetPtr);
@@ -149,8 +155,11 @@ private:
 	static void playlistEditActionClicked (void *itPtr, Widget *widgetPtr);
 	static void playlistPlayActionClicked (void *itPtr, Widget *widgetPtr);
 	static void mediaPlaylistUiEnded (void *itPtr, Ui *uiPtr);
-	static void mediaSearchRecordsAdded (void *itPtr, MediaSearch *search);
-	static void mediaSearchRecordsRemoved (void *itPtr, MediaSearch *search);
+	static void mediaSearchRecordsAdded (void *itPtr, const StringList &recordIds);
+	static void mediaSearchRecordsRemoved (void *itPtr, const StringList &recordIds);
+	static void clearPlayHistoryButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void mediaControlPlayHistoryRecordAdded (void *itPtr, const StdString &recordId);
+	static void mediaControlPlayHistoryRecordRemoved (void *itPtr, const StdString &recordId);
 
 	struct TagTask {
 		PlayerUi *ui;
@@ -161,32 +170,42 @@ private:
 	};
 	// Task functions
 	static void awaitMediaControlReady (void *itPtr);
+	static void loadMediaPlaylists (void *itPtr);
+	void executeLoadMediaPlaylists ();
+	static void awaitLoadMediaPlaylistsComplete (void *itPtr);
+	void populateMediaPlaylistWindows ();
+	static void playMediaItemUiTarget (void *itPtr);
 	static void addTags (void *taskPtr);
 	void executeAddTags (PlayerUi::TagTask *task);
 	static void removeTags (void *taskPtr);
 	void executeRemoveTags (PlayerUi::TagTask *task);
-	static void loadMediaPlaylists (void *itPtr);
-	void executeLoadMediaPlaylists ();
-	static void writeMediaPlaylists (void *itPtr);
-	void executeWriteMediaPlaylists ();
+
+	// Create or remove rows as needed for MediaControl option state
+	void resetMediaOptionRows ();
 
 	// Set the media item window display mode
 	void setMediaItemWindowMode (int mode);
 
+	// Populate a card for the specified MediaItem record
+	void showMediaItem (const StdString &recordId, int baseRow);
+
+	// Set visible state for the loading icon
+	void setLoadingIconVisible (bool show);
+
 	// Set the sortKey value for a view item. If sequenceValue is not provided, use the current time.
 	void setSortKey (MediaPlaylistWindow *mediaPlaylist, int64_t sequenceValue = 0);
-
-	// Clear search state data
-	void clearSearch ();
 
 	// Apply reset state for all active searches
 	void resetSearch ();
 
-	// Execute operations as needed for any active search state
+	// Update interface elements as needed for current search state
 	void updateSearch (int msElapsed);
 
-	// Return a string containing the set of selected media item names, appropriate for use in a command popup, or an empty string if no media items are selected
-	StdString getSelectedMediaNames (bool isPlayableMediaRequired = false);
+	// Return a string containing the set of selected media item names and appropriate for use in a command popup, or an empty string if no media items are selected
+	StdString getSelectedMediaNames (bool requireTagEnabled = false);
+
+	// Append to destList ID values for all selected media items with tag functions enabled
+	void getSelectedTagEnabledMediaIds (StringList *destList);
 
 	// Clear selected state from all media items
 	void unselectAllMedia ();
@@ -197,20 +216,14 @@ private:
 	// Return the provided base value, after appending suffixes as needed to generate an unused playlist name
 	StdString getAvailablePlaylistName (const StdString &baseName = StdString ());
 
-	// Execute operations as needed for playlist state
-	void updatePlaylists ();
-
-	// Copy changes to stored playlist state and queue a write operation
-	void updatePlaylistRecord (const MediaPlaylist &playlist);
-
-	// Remove the specified playlist record and queue a write operation
-	void removePlaylistRecord (const StdString &playlistId);
-
-	// Start video playback windows for each selected stream
-	void playSelectedStreams ();
+	// Start video playback windows for each selected media item
+	void playSelectedMedia ();
 
 	// Reset checked states for row expand toggles, as appropriate for item expand state
 	void resetExpandToggles ();
+
+	// Reset the count value displayed for play history items
+	void resetPlayHistoryCount ();
 
 	// Set the time of the next record sync if it isn't already assigned
 	void syncSearchRecords ();
@@ -218,6 +231,7 @@ private:
 	// Return the number of selected media items
 	int getSelectedMediaCount ();
 
+	PlayerUi::Options playerUiOptions;
 	WidgetHandle<AppCardWindow> appCardHandle;
 	AppCardWindow *appCard;
 	WidgetHandle<Panel> searchPanelHandle;
@@ -226,8 +240,10 @@ private:
 	TextFieldWindow *searchField;
 	WidgetHandle<IconLabelWindow> searchStatusIconHandle;
 	IconLabelWindow *searchStatusIcon;
-	WidgetHandle<MediaControlWindow> mediaControlWindowHandle;
-	MediaControlWindow *mediaControlWindow;
+	WidgetHandle<MediaOptionWindow> mediaOptionWindowHandle;
+	MediaOptionWindow *mediaOptionWindow;
+	WidgetHandle<MediaFilescanWindow> mediaFilescanWindowHandle;
+	MediaFilescanWindow *mediaFilescanWindow;
 	WidgetHandle<TextCardWindow> emptyStateWindowHandle;
 	TextCardWindow *emptyStateWindow;
 	WidgetHandle<IconLabelWindow> loadingIconWindowHandle;
@@ -238,10 +254,20 @@ private:
 	MediaItemWindow *lastSelectedMediaItemWindow;
 	WidgetHandle<Panel> playlistHeaderPanelHandle;
 	Panel *playlistHeaderPanel;
+	WidgetHandle<Panel> playHistoryHeaderPanelHandle;
+	Panel *playHistoryHeaderPanel;
+	WidgetHandle<LabelWindow> playHistoryCountLabelHandle;
+	LabelWindow *playHistoryCountLabel;
+	WidgetHandle<Panel> mediaFilescanHeaderPanelHandle;
+	Panel *mediaFilescanHeaderPanel;
 	WidgetHandle<Toggle> expandPlaylistsToggleHandle;
 	Toggle *expandPlaylistsToggle;
 	WidgetHandle<Button> createPlaylistButtonHandle;
 	Button *createPlaylistButton;
+	WidgetHandle<Button> fileMediaOpenButtonHandle;
+	Button *fileMediaOpenButton;
+	WidgetHandle<PlayFileActionWindow> playFileActionWindowHandle;
+	PlayFileActionWindow *playFileActionWindow;
 	WidgetHandle<TextCardWindow> audioDisabledAlertWindowHandle;
 	TextCardWindow *audioDisabledAlertWindow;
 	int emptyStateType;
@@ -249,24 +275,22 @@ private:
 	int mediaSortOrder;
 	int mediaDisplayCount;
 	int mediaAvailableCount;
-	std::list<MediaPlaylist> mediaPlaylists;
-	HashMap mediaPlaylistWriteMap;
-	SDL_mutex *mediaPlaylistMutex;
-	bool isShowingPlaylists;
-	bool isLoadingPlaylists;
-	bool isLoadPlaylistsComplete;
-	bool shouldWritePlaylists;
-	bool isWritingPlaylists;
-	bool isWritePlaylistsComplete;
+	StringList playHistoryRecordIds;
+	StringList mediaOpenRecordIds;
 	bool isLoadingMedia;
 	StringList loadedRecordIds;
 	StdString searchKey;
-	StringList searchMediaItemIds;
-	SDL_mutex *mediaSearchMutex;
-	std::list<MediaSearch *> mediaSearchList;
 	int64_t mediaSearchUpdateTime;
-	int64_t lastRecordSyncTime;
 	int searchRecordSyncClock;
 	HashMap selectedMediaMap;
+	std::list<MediaPlaylist> mediaPlaylists;
+	bool isLoadMediaPlaylistsComplete;
+	StdString mediaItemUiPlayId;
+	int64_t mediaItemUiPlayTimestamp;
+
+	SDL_mutex *syncRecordMutex;
+	StringList searchSyncRecordIds;
+	StringList playHistorySyncRecordIds;
+	bool isSearchSyncRecordWaiting;
 };
 #endif

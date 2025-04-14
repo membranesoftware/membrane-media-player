@@ -93,12 +93,12 @@ void MediaPlaylistViewWindow::clearItems () {
 	}
 	itemList.clear ();
 	SDL_UnlockMutex (itemListMutex);
+	thumbnailPanel->isVisible = false;
 }
 
 void MediaPlaylistViewWindow::setWindowSize (double windowWidth, double windowHeight) {
 	std::vector<MediaPlaylistViewWindowItem *>::iterator i1, i2;
 	MediaPlaylistViewWindowItem *item;
-	double ratio;
 
 	setFixedSize (true, windowWidth, windowHeight);
 	itemWidth = width - (UiConfiguration::instance->paddingSize * 2.0f);
@@ -110,19 +110,13 @@ void MediaPlaylistViewWindow::setWindowSize (double windowWidth, double windowHe
 	i2 = itemList.end ();
 	while (i1 != i2) {
 		item = *i1;
-		if (item->isLoaded) {
-			if (! item->mediaItem.thumbnailTimestamps.empty ()) {
-				ratio = MediaUtil::defaultAspectRatio;
-				if ((item->thumbnailWidth > 0) && (item->thumbnailHeight > 0)) {
-					ratio = (double) item->thumbnailWidth / (double) item->thumbnailHeight;
-				}
-				item->thumbnailImage->setWindowSize (true, thumbnailPanel->height * ratio, thumbnailPanel->height);
-				item->thumbnailImage->onLoadScale (0.0f, thumbnailPanel->height);
-				item->thumbnailImage->reload ();
-			}
-			else if (item->mediaItem.isAudio && (! item->mediaItem.isVideo) && (! item->mediaItem.hasAudioAlbumArt)) {
-				item->thumbnailImage->setWindowSize (true, thumbnailPanel->height, thumbnailPanel->height);
-			}
+		if ((item->thumbnailWidth > 0) && (item->thumbnailHeight > 0)) {
+			item->thumbnailImage->setWindowSize (true, thumbnailPanel->height * (double) item->thumbnailWidth / (double) item->thumbnailHeight, thumbnailPanel->height);
+			item->thumbnailImage->onLoadScale (0.0f, thumbnailPanel->height);
+			item->thumbnailImage->reload ();
+		}
+		else {
+			item->thumbnailImage->setWindowSize (true, thumbnailPanel->height, thumbnailPanel->height);
 		}
 		++i1;
 	}
@@ -133,15 +127,45 @@ void MediaPlaylistViewWindow::setWindowSize (double windowWidth, double windowHe
 
 void MediaPlaylistViewWindow::addItem (const MediaPlaylistItem &playlistItem) {
 	MediaPlaylistViewWindowItem *item;
+	int listpos;
 
 	item = new MediaPlaylistViewWindowItem ();
-	item->mediaId.assign (playlistItem.mediaId);
-	item->startTimestamp = playlistItem.startTimestamp;
+	item->mediaName.assign (playlistItem.name);
+	item->playSeekTimestamp = playlistItem.playSeekTimestamp;
+	if (playlistItem.isVideo || playlistItem.hasAudioAlbumArt) {
+		item->thumbnailWidth = playlistItem.width;
+		item->thumbnailHeight = playlistItem.height;
+	}
 	item->thumbnailImageHandle.assign (createThumbnailImage ());
 	item->itemLabelHandle.assign (createNameLabel ());
+
+	item->itemLabel->setPlaySeekTimestamp (item->playSeekTimestamp, playlistItem.duration);
+	if ((playlistItem.isVideo || playlistItem.hasAudioAlbumArt) && (item->thumbnailWidth > 0) && (item->thumbnailHeight > 0)) {
+		item->thumbnailImage->mouseLongPressCallback = Widget::EventCallbackContext (MediaPlaylistViewWindow::thumbnailImageLongPressed, this);
+		item->thumbnailImage->loadEndCallback = Widget::EventCallbackContext (MediaPlaylistViewWindow::thumbnailImageLoaded, this);
+		item->thumbnailImage->setWindowSize (true, thumbnailPanel->height * (double) item->thumbnailWidth / (double) item->thumbnailHeight, thumbnailPanel->height);
+		item->thumbnailImage->onLoadScale (0.0f, thumbnailPanel->height);
+		item->thumbnailImage->setDrawAlpha (-1.0f);
+		item->thumbnailImage->loadSeekTimestampVideoFrame (playlistItem.mediaPath, item->playSeekTimestamp, true);
+		item->thumbnailImage->isVisible = true;
+		item->isFrameThumbnail = true;
+	}
+	else if (playlistItem.isAudio && (! playlistItem.isVideo) && (! playlistItem.hasAudioAlbumArt)) {
+		item->thumbnailImage->setWindowSize (true, thumbnailPanel->height, thumbnailPanel->height);
+		item->thumbnailImage->setImage (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_audioIcon)));
+		item->thumbnailImage->setDrawColor (true, UiConfiguration::instance->darkPrimaryColor);
+		item->thumbnailImage->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
+		item->thumbnailImage->isVisible = true;
+	}
+	else {
+		item->thumbnailImage->isVisible = false;
+	}
+
 	SDL_LockMutex (itemListMutex);
 	itemList.push_back (item);
+	listpos = (int) itemList.size ();
 	SDL_UnlockMutex (itemListMutex);
+	item->setListPosition (listpos);
 }
 
 void MediaPlaylistViewWindow::setActiveItem (int itemIndex) {
@@ -217,7 +241,7 @@ void MediaPlaylistViewWindow::reflow () {
 		item = *i1;
 		item->itemLabel->statusLabelWidth = statusw;
 		item->itemLabel->startPositionLabelWidth = startposw;
-		if (item->isLoaded && (! FLOAT_EQUALS (item->itemLabel->nameLabelWidth, namew))) {
+		if (! FLOAT_EQUALS (item->itemLabel->nameLabelWidth, namew)) {
 			item->itemLabel->nameLabelWidth = namew;
 			item->itemLabel->nameLabel->setText (UiConfiguration::instance->fonts[UiConfiguration::CaptionFont]->truncatedText (item->mediaName, namew, Font::dotTruncateSuffix));
 		}
@@ -268,92 +292,40 @@ void MediaPlaylistViewWindow::reflow () {
 	scrollWindow->position.assign (x, y);
 }
 
-void MediaPlaylistViewWindow::syncRecordStore () {
-	std::vector<MediaPlaylistViewWindowItem *>::iterator i1, i2;
-	MediaPlaylistViewWindowItem *item;
-	int listcount, thumbnailcount;
-	double ratio;
-	bool shouldreflow;
-
-	shouldreflow = false;
-	SDL_LockMutex (itemListMutex);
-	listcount = 1;
-	thumbnailcount = 0;
-	i1 = itemList.begin ();
-	i2 = itemList.end ();
-	while (i1 != i2) {
-		item = *i1;
-		if (! item->isLoaded) {
-			if (item->mediaItem.readRecordStore (item->mediaId)) {
-				item->mediaName.assign (item->mediaItem.name);
-				item->thumbnailWidth = item->mediaItem.width;
-				item->thumbnailHeight = item->mediaItem.height;
-				item->itemLabel->setStartTimestamp (item->startTimestamp, item->mediaItem.duration);
-				if (! item->mediaItem.thumbnailTimestamps.empty ()) {
-					ratio = MediaUtil::defaultAspectRatio;
-					if ((item->thumbnailWidth > 0) && (item->thumbnailHeight > 0)) {
-						ratio = (double) item->thumbnailWidth / (double) item->thumbnailHeight;
-					}
-					item->thumbnailImage->mouseLongPressCallback = Widget::EventCallbackContext (MediaPlaylistViewWindow::thumbnailImageLongPressed, this);
-					item->thumbnailImage->loadEndCallback = Widget::EventCallbackContext (MediaPlaylistViewWindow::thumbnailImageLoaded, this);
-					item->thumbnailImage->setWindowSize (true, thumbnailPanel->height * ratio, thumbnailPanel->height);
-					item->thumbnailImage->onLoadScale (0.0f, thumbnailPanel->height);
-					item->thumbnailImage->setDrawAlpha (-1.0f);
-					item->thumbnailImage->loadSeekTimestampVideoFrame (item->mediaItem.mediaPath, item->startTimestamp, true);
-					item->thumbnailImage->isVisible = true;
-				}
-				else if (item->mediaItem.isAudio && (! item->mediaItem.isVideo) && (! item->mediaItem.hasAudioAlbumArt)) {
-					item->thumbnailImage->setWindowSize (true, thumbnailPanel->height, thumbnailPanel->height);
-					item->thumbnailImage->setImage (new Image (SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_audioIcon)));
-					item->thumbnailImage->setDrawColor (true, UiConfiguration::instance->darkPrimaryColor);
-					item->thumbnailImage->setFillBg (true, UiConfiguration::instance->darkBackgroundColor);
-					item->thumbnailImage->isVisible = true;
-				}
-				else {
-					item->thumbnailImage->isVisible = false;
-				}
-				item->isLoaded = true;
-				shouldreflow = true;
-			}
-		}
-		if (item->isLoaded) {
-			if (! item->mediaItem.thumbnailTimestamps.empty ()) {
-				++thumbnailcount;
-			}
-		}
-
-		item->setListPosition (listcount);
-		++listcount;
-		++i1;
-	}
-	SDL_UnlockMutex (itemListMutex);
-
-	if ((! thumbnailPanel->isVisible) && (thumbnailcount > 0)) {
-		thumbnailPanel->isVisible = true;
-		shouldreflow = true;
-	}
-	else if (thumbnailPanel->isVisible && (thumbnailcount <= 0)) {
-		thumbnailPanel->isVisible = false;
-		shouldreflow = true;
-	}
-
-	if (shouldreflow) {
-		reflow ();
-	}
-}
-
 void MediaPlaylistViewWindow::doUpdate (int msElapsed) {
 	std::vector<MediaPlaylistViewWindowItem *>::const_iterator i1, i2;
 	MediaPlaylistViewWindowItem *item;
-	bool found, highlighted;
+	bool found, highlighted, shouldreflow;
 	double x, dx;
 
 	Panel::doUpdate (msElapsed);
 	highlightedThumbnailImageHandle.compact ();
-	found = false;
 	highlighted = false;
+	shouldreflow = false;
 	x = 0.0f;
+
 	SDL_LockMutex (itemListMutex);
+	found = false;
+	i1 = itemList.cbegin ();
+	i2 = itemList.cend ();
+	while (i1 != i2) {
+		item = *i1;
+		if (item->isFrameThumbnail) {
+			found = true;
+			break;
+		}
+		++i1;
+	}
+	if ((! thumbnailPanel->isVisible) && found) {
+		thumbnailPanel->isVisible = true;
+		shouldreflow = true;
+	}
+	else if (thumbnailPanel->isVisible && (! found)) {
+		thumbnailPanel->isVisible = false;
+		shouldreflow = true;
+	}
+
+	found = false;
 	i1 = itemList.cbegin ();
 	i2 = itemList.cend ();
 	while (i1 != i2) {
@@ -416,6 +388,9 @@ void MediaPlaylistViewWindow::doUpdate (int msElapsed) {
 	}
 	SDL_UnlockMutex (itemListMutex);
 
+	if (shouldreflow) {
+		reflow ();
+	}
 	if (highlightedThumbnailImage && (! highlighted)) {
 		highlightedThumbnailImage->setBorder (false);
 		highlightedThumbnailImageHandle.clear ();
@@ -449,7 +424,6 @@ MediaPlaylistViewWindowItemLabel *MediaPlaylistViewWindow::createNameLabel () {
 void MediaPlaylistViewWindow::thumbnailImageLongPressed (void *itPtr, Widget *widgetPtr) {
 	UiStack::instance->showImageDialog ((ImageWindow *) widgetPtr);
 }
-
 void MediaPlaylistViewWindow::thumbnailImageLoaded (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistViewWindow *) itPtr)->reflow ();
 }
@@ -461,23 +435,21 @@ void MediaPlaylistViewWindow::itemNameLabelClicked (void *itPtr, Widget *widgetP
 	it->clickItemIndex = label->itemIndex;
 	it->eventCallback (it->itemClickCallback);
 }
-
 void MediaPlaylistViewWindow::itemNameLabelMouseEntered (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistViewWindowItemLabel *) widgetPtr)->setHighlighted (true);
 }
-
 void MediaPlaylistViewWindow::itemNameLabelMouseExited (void *itPtr, Widget *widgetPtr) {
 	((MediaPlaylistViewWindowItemLabel *) widgetPtr)->setHighlighted (false);
 }
 
 MediaPlaylistViewWindowItem::MediaPlaylistViewWindowItem ()
 : listPosition (0)
-, isLoaded (false)
-, startTimestamp (0)
+, playSeekTimestamp (0)
 , thumbnailWidth (0)
 , thumbnailHeight (0)
 , itemLabelHandle (&itemLabel)
 , thumbnailImageHandle (&thumbnailImage)
+, isFrameThumbnail (false)
 {
 }
 MediaPlaylistViewWindowItem::~MediaPlaylistViewWindowItem ()
@@ -530,10 +502,10 @@ void MediaPlaylistViewWindowItemLabel::setWindowWidth (double widthValue) {
 	reflow ();
 }
 
-void MediaPlaylistViewWindowItemLabel::setStartTimestamp (int64_t startTimestamp, int64_t streamDuration) {
+void MediaPlaylistViewWindowItemLabel::setPlaySeekTimestamp (int64_t playSeekTimestamp, int64_t streamDuration) {
 	StdString text;
 
-	text = UiText::instance->getTimespanText (startTimestamp, UiText::HoursUnit, true);
+	text = UiText::instance->getTimespanText (playSeekTimestamp, UiText::HoursUnit, true);
 	if (streamDuration > 0) {
 		text.appendSprintf ("/%s", UiText::instance->getTimespanText (streamDuration, UiText::HoursUnit, true).c_str ());
 	}

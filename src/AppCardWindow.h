@@ -35,24 +35,30 @@
 #define APP_CARD_WINDOW_H
 
 #include "Widget.h"
+#include "WidgetHandle.h"
 #include "IntList.h"
 #include "StringList.h"
-#include "AppNews.h"
 #include "Panel.h"
 
+class AppNews;
+class SpriteGroup;
 class Image;
 class Label;
 class LabelWindow;
 class Button;
 class Toggle;
 class TextFlow;
+class VideoCycleWindow;
 class HyperlinkWindow;
 class SharedBuffer;
 
 class AppCardWindow : public Panel {
 public:
-	AppCardWindow ();
+	AppCardWindow (SpriteGroup *playerUiSpriteGroup, bool startupPrimePanel = false);
 	~AppCardWindow ();
+
+	// Return a typecasted pointer to the provided widget, or NULL if the widget does not appear to be of the correct type
+	static AppCardWindow *castWidget (Widget *widget);
 
 	// Read-write data members
 	Widget::EventCallbackContext expandStateChangeCallback;
@@ -61,7 +67,6 @@ public:
 
 	// Read-only data members
 	double windowWidth;
-	double unexpandedTextWidth;
 	bool isExpanded;
 	bool isInitializing;
 
@@ -70,6 +75,9 @@ public:
 
 	// Set the window's expand state, then execute any expand state change callback that might be configured unless shouldSkipStateChangeCallback is true
 	void setExpanded (bool expanded, bool shouldSkipStateChangeCallback = false);
+
+	// Store a prefs value indicating that the prime panel should not show on startup
+	void clearStartupPrimePanel ();
 
 	// Execute a check for updates operation
 	void checkForUpdates ();
@@ -89,6 +97,8 @@ private:
 	static void nextButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void updateRequestComplete (void *itPtr, const StdString &targetUrl, int statusCode, SharedBuffer *responseData);
 	static void updateLinkOpened (void *itPtr, Widget *widgetPtr);
+	static void primeButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void backButtonClicked (void *itPtr, Widget *widgetPtr);
 
 	// Populate info text content
 	void resetInfoText ();
@@ -96,16 +106,17 @@ private:
 	// Advance info text to the next item and update widget content
 	void setNextInfoText ();
 
-	// Reset visible state for update row widgets
-	void resetUpdateVisible ();
+	// Populate content of the info text label shown in unexpanded state
+	void resetUnexpandedInfoText ();
+
+	// Populate prime panel content
+	void populatePrimePanel ();
+
+	// Reset visible state for window elements
+	void resetControlsVisible ();
 
 	// Execute initialize operations to read news state from a stored AppNews record and execute a check for updates if requested
-	static void awaitAppNewsReady (void *itPtr);
-	void executeAwaitAppNewsReady ();
-	static void readAppNewsRecord (void *itPtr);
-	void executeReadAppNewsRecord ();
-	static void showLoadResult (void *itPtr);
-	void executeShowLoadResult ();
+	static void awaitMediaControlReady (void *itPtr);
 	void endInitialize ();
 
 	// Process response data from a check for updates operation
@@ -113,13 +124,17 @@ private:
 	static void showUpdateResult (void *itPtr);
 	void executeShowUpdateResult ();
 
-	// Set window state using fields from AppNews data. If showNewsPosts is true, set info text state to news post content if available.
-	void readNewsState (AppNews::NewsState *state);
+	// Set window state using fields from AppNews data
+	void readAppNews (AppNews *appNews);
 
+	SpriteGroup *playerUiSpriteGroup;
+	bool startupPrimePanel;
 	int currentTextId;
 	int nextTextId;
 	IntList infoTextIds;
 	bool isTextCrawlEnabled;
+	bool isShowingInfoText;
+	bool isShowingPrimePanel;
 	bool isShowingUpdateRow;
 	bool isShowingUpdateLink;
 	bool isCheckingForUpdates;
@@ -129,8 +144,7 @@ private:
 	int currentNewsPostId;
 	bool isInitializeShowingNewsPostsFirst;
 	bool isInitializeCheckingForUpdates;
-	AppNews::NewsState *loadNewsState;
-	AppNews::NewsState *updateNewsState;
+	AppNews *updateAppNews;
 	StringList newsPosts;
 	SDL_mutex *newsPostMutex;
 	Image *headerIcon;
@@ -145,11 +159,16 @@ private:
 	ProgressBar *updateProgressBar;
 	TextFlow *updateText;
 	HyperlinkWindow *updateLink;
-	Image *headerUpdateIcon;
+	Image *unexpandedUpdateIcon;
 	Image *infoIcon;
 	TextFlow *infoText;
+	Panel *primePanel;
+	Button *primeButton;
+	Button *backButton;
 	Button *updateButton;
 	Button *aboutButton;
 	Button *nextButton;
+	WidgetHandle<VideoCycleWindow> primeVideoHandle;
+	VideoCycleWindow *primeVideo;
 };
 #endif

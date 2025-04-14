@@ -123,9 +123,10 @@ public:
 	// Execute a scale bump animation for the specified item
 	void animateItemScaleBump (const StdString &itemId);
 
-	// Remove the specified item from the view and destroy its underlying widget. After removing the item, invoke reflow unless shouldSkipReflow is true.
-	void removeItem (const StdString &itemId, bool shouldSkipReflow = false);
-	void removeItem (const char *itemId, bool shouldSkipReflow = false);
+	// Remove the specified item from the view, destroy its underlying widget, and return true if the item was found. After removing the item, invoke reflow unless shouldSkipReflow is true.
+	bool removeItem (const StdString &itemId, bool shouldSkipReflow = false);
+	bool removeItem (const char *itemId, bool shouldSkipReflow = false);
+	bool removeItem (Widget *itemWidget, bool shouldSkipReflow = false);
 
 	// Remove all items in the specified row from the view and destroy their underlying widgets
 	void removeRowItems (int row);

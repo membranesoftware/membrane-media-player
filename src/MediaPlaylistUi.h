@@ -51,9 +51,6 @@ public:
 	MediaPlaylistUi (MediaPlaylistWindow *playlistPtr);
 	~MediaPlaylistUi ();
 
-	// Prefs keys
-	static constexpr const char *imageSizeKey = "MediaPlaylistUiA";
-
 	// Read-write data members
 	Ui::EventCallbackContext endCallback;
 
@@ -66,7 +63,6 @@ public:
 
 protected:
 	// Superclass override methods
-	StdString getSpritePath ();
 	Widget *createBreadcrumbWidget ();
 	OpResult doLoad ();
 	void doUnload ();

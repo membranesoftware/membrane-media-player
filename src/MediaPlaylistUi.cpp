@@ -39,6 +39,7 @@
 #include "UiStack.h"
 #include "UiConfiguration.h"
 #include "UiText.h"
+#include "PrefsKey.h"
 #include "Font.h"
 #include "CardView.h"
 #include "Chip.h"
@@ -75,12 +76,9 @@ MediaPlaylistUi::MediaPlaylistUi (MediaPlaylistWindow *playlistPtr)
 , startPositionSliderHandle (&startPositionSlider)
 , playDurationSliderHandle (&playDurationSlider)
 {
+	spritePrefix.assign (SpriteId::MediaPlaylistUi_prefix);
 }
 MediaPlaylistUi::~MediaPlaylistUi () {
-}
-
-StdString MediaPlaylistUi::getSpritePath () {
-	return (StdString ("ui/MediaPlaylistUi/sprite"));
 }
 
 Widget *MediaPlaylistUi::createBreadcrumbWidget () {
@@ -101,7 +99,7 @@ OpResult MediaPlaylistUi::doLoad () {
 	int imagesize;
 
 	prefs = App::instance->lockPrefs ();
-	imagesize = prefs->find (MediaPlaylistUi::imageSizeKey, (int) Ui::MediumSize);
+	imagesize = prefs->find (PrefsKey::mediaPlaylistUiImageSize, (int) Ui::MediumSize);
 	App::instance->unlockPrefs ();
 
 	setDetailImageSize (imagesize);
@@ -147,7 +145,7 @@ void MediaPlaylistUi::doUnload () {
 	playlist->setShuffle (shuffleToggle->isChecked);
 	playlist->setStartPosition ((int) startPositionSlider->value);
 	playlist->setPlayDuration ((int) playDurationSlider->value);
-	playlist->resetItems (itemIndexList);
+	playlist->setItemOrder (itemIndexList);
 
 	eventCallback (endCallback);
 	playlistHandle.clear ();
@@ -170,7 +168,7 @@ void MediaPlaylistUi::doPause () {
 	HashMap *prefs;
 
 	prefs = App::instance->lockPrefs ();
-	prefs->insert (MediaPlaylistUi::imageSizeKey, detailImageSize);
+	prefs->insert (PrefsKey::mediaPlaylistUiImageSize, detailImageSize);
 	App::instance->unlockPrefs ();
 	itemIndexList.clear ();
 	cardView->processItems (doPause_processItems, &itemIndexList);
@@ -189,7 +187,7 @@ void MediaPlaylistUi::doResume () {
 		i1 = playlist->playlist.items.cbegin ();
 		i2 = playlist->playlist.items.cend ();
 		while (i1 != i2) {
-			if (mediaitem.readRecordStore (i1->mediaId)) {
+			if (mediaitem.readRecordStore (i1->id, true)) {
 				thumbnail = new MediaThumbnailWindow (mediaitem.width, mediaitem.height);
 				thumbnail->itemId = cardView->getAvailableItemId ();
 				thumbnail->mouseClickCallback = Widget::EventCallbackContext (MediaPlaylistUi::thumbnailClicked, this);
@@ -199,7 +197,7 @@ void MediaPlaylistUi::doResume () {
 				thumbnail->sortKey.sprintf ("%016llx", (unsigned long long) thumbnail->listPosition);
 				thumbnail->itemIndex = pos - 1;
 				if (mediaitem.isVideo || (mediaitem.isAudio && mediaitem.hasAudioAlbumArt)) {
-					thumbnail->setSourceVideoFrame (mediaitem.mediaPath, i1->startTimestamp);
+					thumbnail->setSourceVideoFrame (mediaitem.mediaPath, i1->playSeekTimestamp);
 				}
 				else if (mediaitem.isAudio) {
 					thumbnail->setSourceSprite (mediaitem.mediaPath, SpriteGroup::instance->getSprite (SpriteId::SpriteGroup_audioIcon), UiConfiguration::instance->darkPrimaryColor);
@@ -283,12 +281,12 @@ void MediaPlaylistUi::thumbnailCardViewItemLabel (void *itPtr, Widget *itemWidge
 
 	thumbnail = MediaThumbnailWindow::castWidget (itemWidget);
 	if (thumbnail) {
-		text.sprintf ("#%i ", thumbnail->listPosition);
+		cardLabel->setLeftText (StdString::createSprintf ("#%i", thumbnail->listPosition), UiConfiguration::instance->darkInverseTextColor, UiConfiguration::instance->mediumPrimaryColor);
 		if (thumbnail->thumbnailTimestamp > 0) {
-			text.appendSprintf ("<%s> ", UiText::instance->getTimespanText (thumbnail->thumbnailTimestamp, UiText::HoursUnit, true).c_str ());
+			text.sprintf ("<%s> ", UiText::instance->getTimespanText (thumbnail->thumbnailTimestamp, UiText::HoursUnit, true).c_str ());
 		}
 		text.append (OsUtil::getPathBasename (thumbnail->sourcePath));
-		cardLabel->setText (text);
+		cardLabel->setMainText (text);
 	}
 }
 

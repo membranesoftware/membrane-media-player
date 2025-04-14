@@ -34,6 +34,7 @@
 #ifndef UI_LOG_WINDOW_H
 #define UI_LOG_WINDOW_H
 
+#include "UiLog.h"
 #include "Widget.h"
 #include "Panel.h"
 
@@ -47,6 +48,9 @@ class UiLogWindow : public Panel {
 public:
 	UiLogWindow (double windowWidth, double windowHeight);
 	~UiLogWindow ();
+
+	// Read-write data members
+	Widget::EventCallbackContext clearCallback;
 
 	// Read-only data members
 	double windowWidth;
@@ -64,21 +68,16 @@ private:
 	// Callback functions
 	static void closeButtonClicked (void *itPtr, Widget *widgetPtr);
 	static void clearButtonClicked (void *itPtr, Widget *widgetPtr);
+	static void processMessages_appendMessageListItem (void *itPtr, const UiLog::Message &message);
 
-	// Task functions
-	static void loadMessages (void *itPtr);
-	void executeLoadMessages ();
-
-	int stage;
-	bool isLoadDisabled;
-	int firstMessageLine;
-	int lastMessageLine;
 	ImageWindow *headerImage;
 	LabelWindow *titleLabel;
 	Button *closeButton;
 	Button *clearButton;
 	ScrollViewWindow *view;
 	double scrollViewWidth;
-	IconLabelWindow *loadErrorIcon;
+	bool isMessageListLoaded;
+	SDL_mutex *messageListMutex;
+	std::list<UiLog::Message> messageList;
 };
 #endif
